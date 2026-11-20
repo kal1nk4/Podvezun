@@ -2,6 +2,8 @@ export type RideRole = 'driver' | 'passenger';
 
 export type RideFilter = 'all' | 'driver' | 'passenger';
 
+export type RideTagId = 'pets' | 'luggage' | 'card' | 'courtyard';
+
 export type AppView = 'feed' | 'mine';
 
 export type ThemeMode = 'light' | 'dark';
@@ -39,6 +41,8 @@ export interface Ride {
   priceUah: number;
   seats: number;
   comment: string;
+  tags?: RideTagId[];
+  expiresAt?: string;
   createdAt: string;
 }
 
@@ -54,6 +58,15 @@ export interface CreateRidePayload {
   priceUah: number;
   seats: number;
   comment: string;
+  tags?: RideTagId[];
+}
+
+export interface RouteWatchAlert {
+  id: string;
+  fromName: string;
+  toName: string;
+  role: RideFilter;
+  createdAt: string;
 }
 
 export interface TelegramUserProfile {

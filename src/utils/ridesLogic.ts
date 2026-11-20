@@ -4,6 +4,8 @@ import type {
   LatLng,
   Ride,
   RideFilter,
+  RideTagId,
+  RouteWatchAlert,
 } from '../types/ride';
 
 export const KHARKIV_CENTER: LatLng = {
@@ -12,6 +14,7 @@ export const KHARKIV_CENTER: LatLng = {
 };
 
 export const RIDE_TTL_MS = 3 * 60 * 60 * 1000; // 3 часа
+export const RIDE_EXTEND_STEP_MS = 60 * 60 * 1000; // +1 час
 
 export const KHARKIV_LANDMARKS: KharkivLandmark[] = [
   { id: 'center', name: 'Центр', lat: 49.9935, lng: 36.2304 },
@@ -26,6 +29,35 @@ export const KHARKIV_LANDMARKS: KharkivLandmark[] = [
   { id: 'yuzhd', name: 'ЮЖД', lat: 49.9896, lng: 36.2045 },
 ];
 
+export const KHARKIV_HUBS: KharkivLandmark[] = [
+  { id: 'metro-naukova', name: 'м. Научная', lat: 50.0112, lng: 36.2266 },
+  { id: 'metro-universytet', name: 'м. Университет / Госпром', lat: 50.0053, lng: 36.2289 },
+  { id: 'metro-heroiv-praci', name: 'м. Героев Труда', lat: 50.0252, lng: 36.3347 },
+  { id: 'metro-studentska', name: 'м. Студенческая', lat: 50.0177, lng: 36.3338 },
+  { id: 'metro-zahysnykiv', name: 'м. Защитников Украины', lat: 49.9882, lng: 36.2591 },
+  { id: 'metro-palats-sportu', name: 'м. Дворец Спорта', lat: 49.9675, lng: 36.3168 },
+  { id: 'metro-industrialna', name: 'м. Индустриальная', lat: 49.9445, lng: 36.3941 },
+  { id: 'trk-ukraina', name: 'ТРК Украина', lat: 50.0091, lng: 36.3229 },
+  { id: 'nezlamnist-center', name: 'Пункт незламності (пл. Свободы)', lat: 50.0058, lng: 36.2292 },
+];
+
+export const ALL_KHARKIV_POINTS: KharkivLandmark[] = [
+  ...KHARKIV_LANDMARKS,
+  ...KHARKIV_HUBS,
+];
+
+export interface RideTagOption {
+  id: RideTagId;
+  label: string;
+}
+
+export const RIDE_TAGS: RideTagOption[] = [
+  { id: 'pets', label: 'С животными' },
+  { id: 'luggage', label: 'С багажом' },
+  { id: 'card', label: 'На карту' },
+  { id: 'courtyard', label: 'Заеду во двор' },
+];
+
 export const DEPARTURE_PRESETS = [
   'Сейчас',
   'Через 15 мин',
@@ -33,7 +65,17 @@ export const DEPARTURE_PRESETS = [
   'Через 1 час',
 ] as const;
 
-export function isRideExpired(createdAtIso: string, nowMs: number = Date.now()): boolean {
+export function isRideExpired(
+  createdAtIso: string,
+  nowMs: number = Date.now(),
+  expiresAtIso?: string
+): boolean {
+  if (expiresAtIso) {
+    const expiresMs = Date.parse(expiresAtIso);
+    if (!Number.isNaN(expiresMs)) {
+      return nowMs > expiresMs;
+    }
+  }
   const createdMs = Date.parse(createdAtIso);
   if (Number.isNaN(createdMs)) {
     return true;
@@ -41,23 +83,145 @@ export function isRideExpired(createdAtIso: string, nowMs: number = Date.now()):
   return nowMs - createdMs > RIDE_TTL_MS;
 }
 
+export function computeExtendedExpiresAt(
+  ride: Pick<Ride, 'createdAt' | 'expiresAt'>,
+  nowMs: number = Date.now()
+): string {
+  const createdMs = Date.parse(ride.createdAt);
+  const currentExpiryMs = ride.expiresAt
+    ? Date.parse(ride.expiresAt)
+    : Number.isNaN(createdMs)
+      ? nowMs
+      : createdMs + RIDE_TTL_MS;
+  const baseMs = Math.max(nowMs, Number.isNaN(currentExpiryMs) ? nowMs : currentExpiryMs);
+  return new Date(baseMs + RIDE_EXTEND_STEP_MS).toISOString();
+}
+
+export function haversineDistanceKm(a: LatLng, b: LatLng): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+export function formatDistanceFromUser(km: number): string {
+  if (!Number.isFinite(km) || km < 0) return '';
+  if (km < 1) {
+    const meters = Math.max(50, Math.round((km * 1000) / 50) * 50);
+    return `~${meters} м от вас`;
+  }
+  return `~${km.toFixed(1)} км от вас`;
+}
+
 export interface FilterRidesOptions {
   roleFilter?: RideFilter;
   onlyMineUserId?: string | null;
+  fromDistrict?: string;
+  toDistrict?: string;
+  userLocation?: LatLng | null;
+  sortByProximity?: boolean;
   nowMs?: number;
+}
+
+export function matchesDistrictQuery(pointName: string, filterDistrict?: string): boolean {
+  if (!filterDistrict || !filterDistrict.trim()) return true;
+  const needle = filterDistrict.trim().toLowerCase();
+  const hay = pointName.toLowerCase();
+  if (hay.includes(needle)) return true;
+
+  // Also match if coordinates sit within ~2.2 km of the selected district landmark
+  return false;
+}
+
+export function matchesPointOrRadius(
+  pointName: string,
+  lat: number,
+  lng: number,
+  filterDistrict?: string
+): boolean {
+  if (!filterDistrict || !filterDistrict.trim()) return true;
+  if (matchesDistrictQuery(pointName, filterDistrict)) return true;
+  const landmark = findLandmarkByName(filterDistrict);
+  if (!landmark) return false;
+  return haversineDistanceKm({ lat, lng }, landmark) <= 2.3;
 }
 
 export function filterActiveRides(
   rides: Ride[],
   options: FilterRidesOptions = {}
 ): Ride[] {
-  const { roleFilter = 'all', onlyMineUserId = null, nowMs = Date.now() } = options;
+  const {
+    roleFilter = 'all',
+    onlyMineUserId = null,
+    fromDistrict = '',
+    toDistrict = '',
+    userLocation = null,
+    sortByProximity = false,
+    nowMs = Date.now(),
+  } = options;
 
-  return rides
-    .filter((ride) => !isRideExpired(ride.createdAt, nowMs))
+  const filtered = rides
+    .filter((ride) => !isRideExpired(ride.createdAt, nowMs, ride.expiresAt))
     .filter((ride) => (roleFilter === 'all' ? true : ride.role === roleFilter))
     .filter((ride) => (onlyMineUserId ? ride.authorId === onlyMineUserId : true))
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    .filter((ride) =>
+      matchesPointOrRadius(ride.fromName, ride.fromLat, ride.fromLng, fromDistrict)
+    )
+    .filter((ride) =>
+      matchesPointOrRadius(ride.toName, ride.toLat, ride.toLng, toDistrict)
+    );
+
+  if (sortByProximity && userLocation) {
+    return filtered.sort((a, b) => {
+      const distA = haversineDistanceKm(userLocation, { lat: a.fromLat, lng: a.fromLng });
+      const distB = haversineDistanceKm(userLocation, { lat: b.fromLat, lng: b.fromLng });
+      if (Math.abs(distA - distB) > 0.05) {
+        return distA - distB;
+      }
+      return Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    });
+  }
+
+  return filtered.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+export function findMatchingWatchedRides(
+  activeRides: Ride[],
+  alerts: RouteWatchAlert[]
+): Ride[] {
+  if (alerts.length === 0 || activeRides.length === 0) return [];
+  const matchedIds = new Set<string>();
+  const matches: Ride[] = [];
+
+  for (const ride of activeRides) {
+    const isHit = alerts.some((alert) => {
+      if (alert.role !== 'all' && ride.role !== alert.role) return false;
+      const fromMatch = matchesPointOrRadius(
+        ride.fromName,
+        ride.fromLat,
+        ride.fromLng,
+        alert.fromName
+      );
+      const toMatch = matchesPointOrRadius(
+        ride.toName,
+        ride.toLat,
+        ride.toLng,
+        alert.toName
+      );
+      return fromMatch && toMatch;
+    });
+    if (isHit && !matchedIds.has(ride.id)) {
+      matchedIds.add(ride.id);
+      matches.push(ride);
+    }
+  }
+  return matches;
 }
 
 export function formatPriceUah(priceUah: number): string {
@@ -89,6 +253,25 @@ export function formatTimeAgo(createdAtIso: string, nowMs: number = Date.now()):
   return `${diffHours} ч назад`;
 }
 
+export function formatRemainingTime(
+  createdAtIso: string,
+  expiresAtIso?: string,
+  nowMs: number = Date.now()
+): string {
+  const createdMs = Date.parse(createdAtIso);
+  const expiryMs = expiresAtIso
+    ? Date.parse(expiresAtIso)
+    : Number.isNaN(createdMs)
+      ? nowMs
+      : createdMs + RIDE_TTL_MS;
+  if (Number.isNaN(expiryMs)) return '';
+  const diffMin = Math.max(0, Math.round((expiryMs - nowMs) / 60000));
+  if (diffMin < 60) return `ещё ${diffMin} мин`;
+  const hours = Math.floor(diffMin / 60);
+  const mins = diffMin % 60;
+  return mins === 0 ? `ещё ${hours} ч` : `ещё ${hours} ч ${mins} мин`;
+}
+
 export function buildTelegramLink(username?: string | null): string | null {
   if (!username) return null;
   const cleaned = username.trim().replace(/^@+/, '');
@@ -98,15 +281,55 @@ export function buildTelegramLink(username?: string | null): string | null {
   return `https://t.me/${cleaned}`;
 }
 
+export function buildShareRideLink(
+  rideId: string,
+  originUrl?: string,
+  botUsername?: string | null
+): string {
+  if (botUsername && botUsername.trim()) {
+    const cleanBot = botUsername.trim().replace(/^@+/, '');
+    return `https://t.me/${cleanBot}?startapp=ride_${encodeURIComponent(rideId)}`;
+  }
+  const base =
+    originUrl ||
+    (typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : 'https://t.me');
+  const url = new URL(base);
+  url.searchParams.set('ride', rideId);
+  return url.toString();
+}
+
+export function buildShareRideText(ride: Ride): string {
+  const roleLabel = ride.role === 'driver' ? 'Подвезу (водитель)' : 'Ищу авто (пассажир)';
+  return `Подвезун Харьков · ${roleLabel}: ${ride.fromName} → ${ride.toName}, выезд: ${ride.departureLabel}, ${formatPriceUah(ride.priceUah)}, ${formatSeatsLabel(ride.seats, ride.role)}`;
+}
+
+export function parseSharedRideId(search: string, startParam?: string | null): string | null {
+  if (startParam && startParam.startsWith('ride_')) {
+    const id = startParam.slice('ride_'.length).trim();
+    if (id) return id;
+  }
+  try {
+    const params = new URLSearchParams(search);
+    const fromQuery = params.get('ride') || params.get('tgWebAppStartParam');
+    if (!fromQuery) return null;
+    if (fromQuery.startsWith('ride_')) {
+      return fromQuery.slice('ride_'.length).trim() || null;
+    }
+    return fromQuery.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export function findLandmarkByName(name: string): KharkivLandmark | undefined {
-  return KHARKIV_LANDMARKS.find((item) => item.name === name);
+  return ALL_KHARKIV_POINTS.find((item) => item.name === name);
 }
 
 export function describePickedCoordinates(lat: number, lng: number): string {
   let closest: KharkivLandmark | null = null;
   let minDistanceSq = Infinity;
 
-  for (const lm of KHARKIV_LANDMARKS) {
+  for (const lm of ALL_KHARKIV_POINTS) {
     const dLat = lm.lat - lat;
     const dLng = lm.lng - lng;
     const distSq = dLat * dLat + dLng * dLng;
@@ -121,6 +344,10 @@ export function describePickedCoordinates(lat: number, lng: number): string {
     return `р-н ${closest.name} (${lat.toFixed(3)}, ${lng.toFixed(3)})`;
   }
   return `Метка (${lat.toFixed(3)}, ${lng.toFixed(3)})`;
+}
+
+export function getTagLabel(tagId: RideTagId): string {
+  return RIDE_TAGS.find((t) => t.id === tagId)?.label ?? tagId;
 }
 
 export interface RideValidationResult {

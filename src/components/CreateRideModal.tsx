@@ -1,13 +1,17 @@
 import { useState } from 'react';
-import { ArrowUpDown, Car, Hand, MapPin, X } from 'lucide-react';
-import type { CreateRidePayload, RideRole } from '../types/ride';
+import { ArrowUpDown, Car, Hand, Loader2, LocateFixed, MapPin, X } from 'lucide-react';
+import type { CreateRidePayload, RideRole, RideTagId } from '../types/ride';
 import {
+  ALL_KHARKIV_POINTS,
   DEPARTURE_PRESETS,
+  describePickedCoordinates,
   findLandmarkByName,
+  KHARKIV_HUBS,
   KHARKIV_LANDMARKS,
+  RIDE_TAGS,
   validateRideInput,
 } from '../utils/ridesLogic';
-import { triggerHaptic } from '../utils/telegram';
+import { requestUserGeolocation, triggerHaptic } from '../utils/telegram';
 import type { MapPickerTarget } from './KharkivMap';
 
 export interface CreateRideDraft {
@@ -23,6 +27,7 @@ export interface CreateRideDraft {
   priceUah: string;
   seats: number;
   comment: string;
+  tags: RideTagId[];
 }
 
 interface CreateRideModalProps {
@@ -47,13 +52,48 @@ export function CreateRideModal({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [locatingFrom, setLocatingFrom] = useState(false);
 
   if (!isOpen || isPickingOnMap) return null;
 
   const isCustomFrom =
-    Boolean(draft.fromName) && !KHARKIV_LANDMARKS.some((lm) => lm.name === draft.fromName);
+    Boolean(draft.fromName) && !ALL_KHARKIV_POINTS.some((lm) => lm.name === draft.fromName);
   const isCustomTo =
-    Boolean(draft.toName) && !KHARKIV_LANDMARKS.some((lm) => lm.name === draft.toName);
+    Boolean(draft.toName) && !ALL_KHARKIV_POINTS.some((lm) => lm.name === draft.toName);
+
+  const handleUseMyLocationForFrom = async () => {
+    triggerHaptic('light');
+    setLocatingFrom(true);
+    setErrors((prev) => ({ ...prev, from: '' }));
+    try {
+      const coords = await requestUserGeolocation();
+      const label = describePickedCoordinates(coords.lat, coords.lng);
+      onChangeDraft((prev) => ({
+        ...prev,
+        fromName: label,
+        fromLat: coords.lat,
+        fromLng: coords.lng,
+      }));
+    } catch (err) {
+      setErrors((prev) => ({
+        ...prev,
+        from: err instanceof Error ? err.message : 'Не удалось определить геопозицию',
+      }));
+    } finally {
+      setLocatingFrom(false);
+    }
+  };
+
+  const toggleTag = (tagId: RideTagId) => {
+    triggerHaptic('light');
+    onChangeDraft((prev) => {
+      const exists = prev.tags.includes(tagId);
+      return {
+        ...prev,
+        tags: exists ? prev.tags.filter((t) => t !== tagId) : [...prev.tags, tagId],
+      };
+    });
+  };
 
   const handleSelectLandmark = (field: 'from' | 'to', value: string) => {
     const landmark = findLandmarkByName(value);
@@ -112,6 +152,7 @@ export function CreateRideModal({
       priceUah: Number.isNaN(numericPrice) ? -1 : numericPrice,
       seats: draft.seats,
       comment: draft.comment,
+      tags: draft.tags,
     };
 
     const validation = validateRideInput(payload);
@@ -226,28 +267,51 @@ export function CreateRideModal({
                   Поменять
                 </button>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-1.5">
                 <select
                   id="ride-from-select"
                   value={draft.fromName}
                   onChange={(e) => handleSelectLandmark('from', e.target.value)}
-                  className="flex-1 min-h-[46px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[var(--accent-primary)]"
+                  className="flex-1 min-w-0 min-h-[46px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[var(--accent-primary)]"
                 >
                   <option value="">Выберите район или ориентир</option>
                   {isCustomFrom && (
                     <option value={draft.fromName}>{draft.fromName}</option>
                   )}
-                  {KHARKIV_LANDMARKS.map((lm) => (
-                    <option key={lm.id} value={lm.name}>
-                      {lm.name}
-                    </option>
-                  ))}
+                  <optgroup label="Районы Харькова">
+                    {KHARKIV_LANDMARKS.map((lm) => (
+                      <option key={lm.id} value={lm.name}>
+                        {lm.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Метро и ориентиры">
+                    {KHARKIV_HUBS.map((lm) => (
+                      <option key={lm.id} value={lm.name}>
+                        {lm.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
+                <button
+                  type="button"
+                  onClick={() => void handleUseMyLocationForFrom()}
+                  disabled={locatingFrom}
+                  aria-label="Определить мою геопозицию для точки А"
+                  title="Моё местоположение"
+                  className="min-h-[46px] min-w-[46px] px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-100 flex items-center justify-center shrink-0 transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  {locatingFrom ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-text)]" aria-hidden="true" />
+                  ) : (
+                    <LocateFixed className="w-4 h-4 text-[var(--accent-text)]" aria-hidden="true" />
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={() => onStartMapPick('from')}
                   aria-label="Выбрать точку А на карте"
-                  className="min-h-[46px] px-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                  className="min-h-[46px] px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
                 >
                   <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden="true" />
                   На карте
@@ -264,28 +328,37 @@ export function CreateRideModal({
               <label htmlFor="ride-to-select" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 Точка Б — Куда
               </label>
-              <div className="flex gap-2">
+              <div className="flex gap-1.5">
                 <select
                   id="ride-to-select"
                   value={draft.toName}
                   onChange={(e) => handleSelectLandmark('to', e.target.value)}
-                  className="flex-1 min-h-[46px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[var(--accent-primary)]"
+                  className="flex-1 min-w-0 min-h-[46px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[var(--accent-primary)]"
                 >
                   <option value="">Выберите район или ориентир</option>
                   {isCustomTo && (
                     <option value={draft.toName}>{draft.toName}</option>
                   )}
-                  {KHARKIV_LANDMARKS.map((lm) => (
-                    <option key={lm.id} value={lm.name}>
-                      {lm.name}
-                    </option>
-                  ))}
+                  <optgroup label="Районы Харькова">
+                    {KHARKIV_LANDMARKS.map((lm) => (
+                      <option key={lm.id} value={lm.name}>
+                        {lm.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Метро и ориентиры">
+                    {KHARKIV_HUBS.map((lm) => (
+                      <option key={lm.id} value={lm.name}>
+                        {lm.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
                 <button
                   type="button"
                   onClick={() => onStartMapPick('to')}
                   aria-label="Выбрать точку Б на карте"
-                  className="min-h-[46px] px-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                  className="min-h-[46px] px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
                 >
                   <MapPin className="w-4 h-4 text-amber-600 dark:text-amber-300 shrink-0" aria-hidden="true" />
                   На карте
@@ -420,6 +493,33 @@ export function CreateRideModal({
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+
+          {/* Quick condition tags */}
+          <div>
+            <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Условия поездки (необязательно)
+            </span>
+            <div className="grid grid-cols-2 gap-2">
+              {RIDE_TAGS.map((tag) => {
+                const active = draft.tags.includes(tag.id);
+                return (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    onClick={() => toggleTag(tag.id)}
+                    aria-pressed={active}
+                    className={`min-h-[40px] px-3 rounded-xl border text-xs font-semibold text-left transition-colors cursor-pointer whitespace-nowrap ${
+                      active
+                        ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-text)] font-bold'
+                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-slate-300 dark:bg-[#0B0E14] dark:border-slate-800 dark:text-slate-300 dark:hover:border-slate-700'
+                    }`}
+                  >
+                    {tag.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

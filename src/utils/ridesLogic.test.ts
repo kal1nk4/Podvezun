@@ -1,16 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ALL_KHARKIV_POINTS,
+  buildShareRideLink,
+  buildShareRideText,
   buildTelegramLink,
+  computeExtendedExpiresAt,
   describePickedCoordinates,
   filterActiveRides,
+  findMatchingWatchedRides,
+  formatDistanceFromUser,
   formatPriceUah,
+  haversineDistanceKm,
   isRideExpired,
+  KHARKIV_HUBS,
   KHARKIV_LANDMARKS,
+  parseSharedRideId,
+  RIDE_EXTEND_STEP_MS,
   RIDE_TTL_MS,
   validateRideInput,
 } from './ridesLogic';
-import type { Ride } from '../types/ride';
+import type { Ride, RouteWatchAlert } from '../types/ride';
 
 const NOW = Date.parse('2026-11-19T18:00:00.000Z');
 
@@ -32,6 +42,7 @@ const sampleRides: Ride[] = [
     priceUah: 50,
     seats: 3,
     comment: 'Серый Lanos',
+    tags: ['luggage', 'card'],
     createdAt: new Date(NOW - 10 * 60 * 1000).toISOString(),
   },
   {
@@ -51,6 +62,7 @@ const sampleRides: Ride[] = [
     priceUah: 0,
     seats: 1,
     comment: 'На перекрестке Тракторостроителей',
+    tags: ['pets'],
     createdAt: new Date(NOW - 45 * 60 * 1000).toISOString(),
   },
   {
@@ -74,39 +86,94 @@ const sampleRides: Ride[] = [
   },
 ];
 
-test('KHARKIV_LANDMARKS includes all 10 required districts', () => {
+test('KHARKIV_LANDMARKS includes all 10 required districts and KHARKIV_HUBS expands landmarks', () => {
   assert.equal(KHARKIV_LANDMARKS.length, 10);
+  assert.ok(KHARKIV_HUBS.length >= 8);
+  assert.equal(ALL_KHARKIV_POINTS.length, KHARKIV_LANDMARKS.length + KHARKIV_HUBS.length);
 });
 
-test('isRideExpired hides rides older than 3 hours', () => {
+test('isRideExpired hides rides older than 3 hours unless extended via expiresAt', () => {
   const fresh = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
   const expired = new Date(NOW - RIDE_TTL_MS - 1000).toISOString();
+  const extendedFuture = new Date(NOW + 45 * 60 * 1000).toISOString();
   assert.equal(isRideExpired(fresh, NOW), false);
   assert.equal(isRideExpired(expired, NOW), true);
+  assert.equal(isRideExpired(expired, NOW, extendedFuture), false);
   assert.equal(isRideExpired('invalid-date', NOW), true);
 });
 
-test('filterActiveRides excludes expired rides, filters by role and author, and sorts newest first', () => {
+test('computeExtendedExpiresAt adds 1 hour from current expiry or now', () => {
+  const ride = sampleRides[0];
+  const nextIso = computeExtendedExpiresAt(ride, NOW);
+  const createdMs = Date.parse(ride.createdAt);
+  assert.equal(Date.parse(nextIso), createdMs + RIDE_TTL_MS + RIDE_EXTEND_STEP_MS);
+});
+
+test('filterActiveRides filters by role, author, district, and sorts by proximity', () => {
   const allActive = filterActiveRides(sampleRides, { roleFilter: 'all', nowMs: NOW });
   assert.deepEqual(
     allActive.map((r) => r.id),
     ['1', '2']
   );
 
-  const driversOnly = filterActiveRides(sampleRides, { roleFilter: 'driver', nowMs: NOW });
-  assert.deepEqual(
-    driversOnly.map((r) => r.id),
-    ['1']
-  );
-
-  const myRides = filterActiveRides(sampleRides, {
-    roleFilter: 'all',
-    onlyMineUserId: 'u1',
+  const byFrom = filterActiveRides(sampleRides, {
+    fromDistrict: 'Салтовка',
     nowMs: NOW,
   });
   assert.deepEqual(
-    myRides.map((r) => r.id),
-    ['1']
+    byFrom.map((r) => r.id),
+    ['2']
+  );
+
+  // Near Saltivka -> ride 2 should come first when sorting by proximity
+  const nearSaltivka = filterActiveRides(sampleRides, {
+    userLocation: { lat: 50.023, lng: 36.332 },
+    sortByProximity: true,
+    nowMs: NOW,
+  });
+  assert.deepEqual(
+    nearSaltivka.map((r) => r.id),
+    ['2', '1']
+  );
+});
+
+test('haversineDistanceKm and formatDistanceFromUser compute realistic Kharkiv distances', () => {
+  const dist = haversineDistanceKm(
+    { lat: 49.9935, lng: 36.2304 },
+    { lat: 50.0226, lng: 36.334 }
+  );
+  assert.ok(dist > 6 && dist < 10);
+  assert.equal(formatDistanceFromUser(0.42), '~400 м от вас');
+  assert.equal(formatDistanceFromUser(3.45), '~3.5 км от вас');
+});
+
+test('buildShareRideLink, buildShareRideText, and parseSharedRideId handle web and Telegram deep links', () => {
+  const webLink = buildShareRideLink('seed-1', 'https://podvezun.app/');
+  assert.equal(webLink, 'https://podvezun.app/?ride=seed-1');
+
+  const botLink = buildShareRideLink('seed-1', 'https://podvezun.app/', '@podvezun_bot');
+  assert.equal(botLink, 'https://t.me/podvezun_bot?startapp=ride_seed-1');
+
+  assert.equal(parseSharedRideId('?ride=seed-1'), 'seed-1');
+  assert.equal(parseSharedRideId('', 'ride_seed-2'), 'seed-2');
+  assert.match(buildShareRideText(sampleRides[0]), /Холодная Гора → Центр/);
+});
+
+test('findMatchingWatchedRides finds rides matching user RouteWatchAlert rules', () => {
+  const active = filterActiveRides(sampleRides, { nowMs: NOW });
+  const alerts: RouteWatchAlert[] = [
+    {
+      id: 'a1',
+      fromName: 'Салтовка',
+      toName: 'ЮЖД',
+      role: 'all',
+      createdAt: new Date(NOW).toISOString(),
+    },
+  ];
+  const matches = findMatchingWatchedRides(active, alerts);
+  assert.deepEqual(
+    matches.map((r) => r.id),
+    ['2']
   );
 });
 

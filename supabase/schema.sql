@@ -20,21 +20,24 @@ create table if not exists public.rides (
   price_uah integer not null default 0 check (price_uah >= 0 and price_uah <= 5000),
   seats integer not null default 1 check (seats >= 1 and seats <= 4),
   comment text not null default '',
+  tags text[] not null default '{}',
+  expires_at timestamptz not null default (now() + interval '3 hours'),
   created_at timestamptz not null default now()
 );
 
--- Индекс для быстрой выборки свежих заявок (за последние 3 часа)
+-- Индексы для быстрой выборки свежих заявок
 create index if not exists rides_created_at_idx on public.rides (created_at desc);
+create index if not exists rides_expires_at_idx on public.rides (expires_at desc);
 create index if not exists rides_author_id_idx on public.rides (author_id);
 
 -- Включаем Row Level Security (RLS)
 alter table public.rides enable row level security;
 
--- Разрешаем чтение активных заявок (не старше 3 часов) всем пользователям Mini App
+-- Разрешаем чтение активных заявок всем пользователям Mini App
 create policy "Public read active rides"
   on public.rides
   for select
-  using (created_at >= now() - interval '3 hours');
+  using (coalesce(expires_at, created_at + interval '3 hours') >= now());
 
 -- Разрешаем публикацию заявок через anon key (в продакшене можно усилить проверкой Telegram initData через Edge Function)
 create policy "Public insert rides"
@@ -42,11 +45,35 @@ create policy "Public insert rides"
   for insert
   with check (true);
 
+-- Разрешаем обновление мест и продление своей заявки
+create policy "Public update rides"
+  on public.rides
+  for update
+  using (true)
+  with check (true);
+
 -- Разрешаем удаление заявки (клиент фильтрует по author_id; для строгой проверки используйте Edge Function с initData)
 create policy "Public delete rides"
   on public.rides
   for delete
   using (true);
+
+-- Таблица подписок радара попутчиков (для опциональных уведомлений через Telegram-бота)
+create table if not exists public.route_alerts (
+  id uuid primary key default gen_random_uuid(),
+  user_id text not null,
+  from_name text not null,
+  to_name text not null,
+  role text not null default 'all' check (role in ('all', 'driver', 'passenger')),
+  created_at timestamptz not null default now()
+);
+
+alter table public.route_alerts enable row level security;
+create policy "Public manage route alerts"
+  on public.route_alerts
+  for all
+  using (true)
+  with check (true);
 
 -- Включаем Realtime для мгновенного обновления карты и ленты
 alter publication supabase_realtime add table public.rides;

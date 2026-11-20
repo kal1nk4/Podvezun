@@ -1,16 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Check, Crosshair, Layers, MessageCircle, Navigation, X } from 'lucide-react';
-import type { LatLng, MapStyleId, Ride } from '../types/ride';
+import { Check, Crosshair, Layers, Loader2, LocateFixed, MessageCircle, Navigation, Route, Share2, X } from 'lucide-react';
+import type { AccentColorId, LatLng, MapStyleId, Ride } from '../types/ride';
+import {
+  fetchRoadRoute,
+  formatRouteStats,
+  getCachedRoadRoute,
+  type RouteGeometryResult,
+} from '../utils/osrmRoute';
 import {
   buildTelegramLink,
   formatPriceUah,
   formatSeatsLabel,
+  getTagLabel,
   KHARKIV_CENTER,
 } from '../utils/ridesLogic';
 import { openTelegramUser, triggerHaptic } from '../utils/telegram';
-import { getMapStyleOption, MAP_STYLES } from '../utils/themeConfig';
+import { getAccentOption, getMapStyleOption, MAP_STYLES } from '../utils/themeConfig';
 
 export type MapPickerTarget = 'from' | 'to' | null;
 
@@ -25,7 +32,12 @@ interface KharkivMapProps {
   onCancelPicker: () => void;
   theme: 'light' | 'dark';
   mapStyle: MapStyleId;
+  accentColor: AccentColorId;
   onChangeMapStyle: (style: MapStyleId) => void;
+  userLocation?: LatLng | null;
+  locatingUser?: boolean;
+  onLocateMe?: () => void;
+  onShareRide?: (ride: Ride) => Promise<boolean>;
 }
 
 function escapeHtml(text: string): string {
@@ -78,17 +90,31 @@ export function KharkivMap({
   onCancelPicker,
   theme,
   mapStyle,
+  accentColor,
   onChangeMapStyle,
+  userLocation = null,
+  locatingUser = false,
+  onLocateMe,
+  onShareRide,
 }: KharkivMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
+  const userLayerRef = useRef<L.LayerGroup | null>(null);
+  const lastPannedLocRef = useRef<string | null>(null);
+  const fittedRouteKeyRef = useRef<string | null>(null);
   const pickerRef = useRef<MapPickerTarget>(pickerTarget);
   const onPickRef = useRef(onPickPoint);
   const onSelectRef = useRef(onSelectRide);
   const [isStyleMenuOpen, setIsStyleMenuOpen] = useState(false);
+  const [sharedCopied, setSharedCopied] = useState(false);
+  const [routeState, setRouteState] = useState<{
+    rideId: string;
+    loading: boolean;
+    result: RouteGeometryResult | null;
+  } | null>(null);
 
   pickerRef.current = pickerTarget;
   onPickRef.current = onPickPoint;
@@ -96,6 +122,7 @@ export function KharkivMap({
 
   const isDark = theme === 'dark';
   const currentStyle = getMapStyleOption(mapStyle);
+  const accentPrimaryColor = getAccentOption(accentColor)[theme].primary;
 
   // Initialize Leaflet map once
   useEffect(() => {
@@ -115,6 +142,7 @@ export function KharkivMap({
 
     const markersLayer = L.layerGroup().addTo(map);
     const routeLayer = L.layerGroup().addTo(map);
+    const userLayer = L.layerGroup().addTo(map);
 
     map.on('click', (e: L.LeafletMouseEvent) => {
       setIsStyleMenuOpen(false);
@@ -131,6 +159,7 @@ export function KharkivMap({
     mapRef.current = map;
     markersLayerRef.current = markersLayer;
     routeLayerRef.current = routeLayer;
+    userLayerRef.current = userLayer;
 
     return () => {
       resizeObserver.disconnect();
@@ -139,6 +168,7 @@ export function KharkivMap({
       tileLayerRef.current = null;
       markersLayerRef.current = null;
       routeLayerRef.current = null;
+      userLayerRef.current = null;
     };
   }, []);
 
@@ -165,6 +195,45 @@ export function KharkivMap({
     if (!container) return;
     container.style.cursor = pickerTarget ? 'crosshair' : '';
   }, [pickerTarget]);
+
+  // Render user GPS location dot when geolocation is active
+  useEffect(() => {
+    const userLayer = userLayerRef.current;
+    const map = mapRef.current;
+    if (!userLayer || !map) return;
+
+    userLayer.clearLayers();
+    if (!userLocation) {
+      lastPannedLocRef.current = null;
+      return;
+    }
+
+    const userIcon = L.divIcon({
+      className: 'podvezun-user-gps',
+      html: '<div style="width:16px;height:16px;border-radius:9999px;background:#38BDF8;border:3px solid #FFFFFF;box-shadow:0 0 0 6px rgba(56,189,248,0.28),0 2px 8px rgba(0,0,0,0.45);"></div>',
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+    });
+
+    L.marker([userLocation.lat, userLocation.lng], {
+      icon: userIcon,
+      zIndexOffset: 700,
+    })
+      .bindTooltip('Вы здесь', {
+        direction: 'top',
+        offset: [0, -10],
+        className: 'podvezun-tooltip',
+      })
+      .addTo(userLayer);
+
+    const locKey = `${userLocation.lat.toFixed(4)},${userLocation.lng.toFixed(4)}`;
+    if (lastPannedLocRef.current !== locKey && !selectedRide) {
+      lastPannedLocRef.current = locKey;
+      map.setView([userLocation.lat, userLocation.lng], Math.max(map.getZoom(), 13), {
+        animate: true,
+      });
+    }
+  }, [userLocation, selectedRide]);
 
   // Render active ride pins + draft pins
   useEffect(() => {
@@ -227,7 +296,40 @@ export function KharkivMap({
     }
   }, [rides, selectedRide, pickerTarget, draftFrom, draftTo, isDark]);
 
-  // Render selected ride A -> B route line & fit bounds
+  // Fetch OSRM driving route ONLY for the currently selected ride (cached with 5s timeout + fallback)
+  useEffect(() => {
+    if (!selectedRide || pickerTarget) {
+      setRouteState(null);
+      fittedRouteKeyRef.current = null;
+      return;
+    }
+
+    const from = { lat: selectedRide.fromLat, lng: selectedRide.fromLng };
+    const to = { lat: selectedRide.toLat, lng: selectedRide.toLng };
+    const cached = getCachedRoadRoute(from, to);
+
+    if (cached) {
+      setRouteState({ rideId: selectedRide.id, loading: false, result: cached });
+      return;
+    }
+
+    const controller = new AbortController();
+    setRouteState({ rideId: selectedRide.id, loading: true, result: null });
+
+    void fetchRoadRoute(from, to, {
+      timeoutMs: 5000,
+      signal: controller.signal,
+    }).then((result) => {
+      if (controller.signal.aborted) return;
+      setRouteState({ rideId: selectedRide.id, loading: false, result });
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [selectedRide, pickerTarget]);
+
+  // Draw selected ride route on Leaflet using current user accent color & fitBounds cleanly
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
     const map = mapRef.current;
@@ -237,25 +339,31 @@ export function KharkivMap({
 
     if (!selectedRide || pickerTarget) return;
 
-    const routeColor = selectedRide.role === 'driver' ? '#10B981' : '#F59E0B';
-    const points: [number, number][] = [
-      [selectedRide.fromLat, selectedRide.fromLng],
-      [selectedRide.toLat, selectedRide.toLng],
-    ];
+    const activeResult =
+      routeState && routeState.rideId === selectedRide.id ? routeState.result : null;
+    if (!activeResult) {
+      // Wait for cached/OSRM/fallback coordinates so we don't flash a straight line before road geometry arrives
+      return;
+    }
+
+    const points = activeResult.coordinates;
+    const routeColor = accentPrimaryColor;
 
     L.polyline(points, {
       color: routeColor,
-      weight: 8,
-      opacity: isDark ? 0.24 : 0.2,
+      weight: 9,
+      opacity: isDark ? 0.28 : 0.22,
       lineCap: 'round',
+      lineJoin: 'round',
     }).addTo(routeLayer);
 
     L.polyline(points, {
       color: routeColor,
-      weight: 3.5,
-      opacity: 0.95,
-      dashArray: '8, 8',
+      weight: 4,
+      opacity: 0.96,
+      dashArray: activeResult.isFallback ? '8, 8' : undefined,
       lineCap: 'round',
+      lineJoin: 'round',
     }).addTo(routeLayer);
 
     L.marker(points[0], {
@@ -270,7 +378,7 @@ export function KharkivMap({
       })
       .addTo(routeLayer);
 
-    L.marker(points[1], {
+    L.marker(points[points.length - 1], {
       icon: createEndpointIcon('Б', routeColor, isDark),
       interactive: false,
       zIndexOffset: 600,
@@ -282,16 +390,28 @@ export function KharkivMap({
       })
       .addTo(routeLayer);
 
-    const bounds = L.latLngBounds(points);
-    map.fitBounds(bounds, {
-      paddingTopLeft: [44, 64],
-      paddingBottomRight: [44, 145],
-      maxZoom: 14,
-      animate: true,
-    });
-  }, [selectedRide, pickerTarget, isDark]);
+    const fitKey = `${selectedRide.id}:${activeResult.isFallback ? 'fb' : 'road'}`;
+    if (fittedRouteKeyRef.current !== fitKey) {
+      fittedRouteKeyRef.current = fitKey;
+      const bounds = L.latLngBounds(points);
+      map.fitBounds(bounds, {
+        paddingTopLeft: [48, 72],
+        paddingBottomRight: [48, 245],
+        maxZoom: 15,
+        animate: true,
+      });
+    }
+  }, [selectedRide, pickerTarget, routeState, accentPrimaryColor, isDark]);
 
   const telegramHref = selectedRide ? buildTelegramLink(selectedRide.authorUsername) : null;
+  const activeRouteState =
+    selectedRide && routeState?.rideId === selectedRide.id ? routeState : null;
+  const routeStatsLabel = activeRouteState?.result
+    ? formatRouteStats(
+        activeRouteState.result.distanceMeters,
+        activeRouteState.result.durationSeconds
+      )
+    : null;
 
   return (
     <div
@@ -447,6 +567,32 @@ export function KharkivMap({
         </div>
       )}
 
+      {/* Locate Me button above Leaflet zoom controls */}
+      {!pickerTarget && onLocateMe && (
+        <button
+          type="button"
+          onClick={() => {
+            if (userLocation && mapRef.current) {
+              mapRef.current.setView([userLocation.lat, userLocation.lng], 13, { animate: true });
+            }
+            onLocateMe();
+          }}
+          disabled={locatingUser}
+          aria-label="Показать моё местоположение на карте"
+          title="Моё местоположение"
+          className="absolute right-[10px] bottom-[106px] z-[450] w-[38px] h-[38px] rounded-[10px] bg-white hover:bg-slate-100 text-slate-800 border border-slate-300/80 dark:bg-[#131822] dark:hover:bg-[#1E2634] dark:text-slate-200 dark:border-slate-700/80 shadow-lg flex items-center justify-center transition-colors cursor-pointer disabled:opacity-60"
+        >
+          {locatingUser ? (
+            <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-text)]" aria-hidden="true" />
+          ) : (
+            <LocateFixed
+              className={`w-4 h-4 ${userLocation ? 'text-[var(--accent-text)]' : ''}`}
+              aria-hidden="true"
+            />
+          )}
+        </button>
+      )}
+
       {/* Compact selected ride route card overlaid on map */}
       {selectedRide && !pickerTarget && (
         <div
@@ -478,6 +624,36 @@ export function KharkivMap({
               <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400 font-mono-tabular">
                 Выезд: {selectedRide.departureLabel} · {formatSeatsLabel(selectedRide.seats, selectedRide.role)}
               </p>
+              <div
+                className="mt-1.5 flex items-center gap-1.5 text-xs min-h-[18px]"
+                data-testid="selected-route-stats"
+              >
+                {activeRouteState?.loading ? (
+                  <>
+                    <Loader2
+                      className="w-3.5 h-3.5 text-[var(--accent-text)] animate-spin shrink-0"
+                      aria-hidden="true"
+                    />
+                    <span className="text-slate-500 dark:text-slate-400 font-medium">
+                      Строим маршрут по дорогам...
+                    </span>
+                  </>
+                ) : routeStatsLabel ? (
+                  <>
+                    <Route
+                      className="w-3.5 h-3.5 text-[var(--accent-text)] shrink-0"
+                      aria-hidden="true"
+                    />
+                    <span className="font-mono-tabular font-semibold text-slate-800 dark:text-slate-200">
+                      {routeStatsLabel}
+                    </span>
+                  </>
+                ) : activeRouteState?.result?.isFallback ? (
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Прямой ориентир маршрута
+                  </span>
+                ) : null}
+              </div>
             </div>
             <button
               type="button"
@@ -488,6 +664,12 @@ export function KharkivMap({
               <X className="w-4 h-4" />
             </button>
           </div>
+
+          {selectedRide.tags && selectedRide.tags.length > 0 && (
+            <p className="mt-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              {selectedRide.tags.map((t) => getTagLabel(t)).join(' · ')}
+            </p>
+          )}
 
           {selectedRide.comment && (
             <p className="mt-1.5 text-xs text-slate-700 dark:text-slate-300 line-clamp-2 leading-relaxed">
@@ -516,15 +698,42 @@ export function KharkivMap({
                 Telegram @username не указан
               </span>
             )}
+            {onShareRide && (
+              <button
+                type="button"
+                onClick={() => {
+                  void onShareRide(selectedRide).then((copied) => {
+                    if (copied) {
+                      setSharedCopied(true);
+                      window.setTimeout(() => setSharedCopied(false), 1800);
+                    }
+                  });
+                }}
+                aria-label="Поделиться маршрутом"
+                title="Поделиться маршрутом"
+                className="min-h-[44px] min-w-[44px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                {sharedCopied ? (
+                  <Check className="w-4 h-4 text-[var(--accent-text)]" aria-hidden="true" />
+                ) : (
+                  <Share2 className="w-4 h-4" aria-hidden="true" />
+                )}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
                 if (mapRef.current) {
-                  const bounds = L.latLngBounds([
+                  const fitPoints = activeRouteState?.result?.coordinates ?? [
                     [selectedRide.fromLat, selectedRide.fromLng],
                     [selectedRide.toLat, selectedRide.toLng],
-                  ]);
-                  mapRef.current.fitBounds(bounds, { padding: [50, 80], maxZoom: 14 });
+                  ];
+                  const bounds = L.latLngBounds(fitPoints);
+                  mapRef.current.fitBounds(bounds, {
+                    paddingTopLeft: [48, 72],
+                    paddingBottomRight: [48, 245],
+                    maxZoom: 15,
+                  });
                 }
               }}
               aria-label="Центрировать маршрут на карте"

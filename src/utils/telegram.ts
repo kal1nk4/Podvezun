@@ -1,5 +1,5 @@
 import WebApp from '@twa-dev/sdk';
-import type { TelegramUserProfile } from '../types/ride';
+import type { LatLng, TelegramUserProfile } from '../types/ride';
 
 const GUEST_ID_STORAGE_KEY = 'podveznun_guest_author_id';
 
@@ -19,6 +19,15 @@ export function applyTelegramThemeColors(theme: 'light' | 'dark'): void {
     WebApp.setBackgroundColor(color);
   } catch {
     // Older Telegram clients may not support setHeaderColor
+  }
+}
+
+export function getTelegramStartParam(): string | null {
+  try {
+    const param = WebApp.initDataUnsafe?.start_param;
+    return typeof param === 'string' && param.trim() ? param.trim() : null;
+  } catch {
+    return null;
   }
 }
 
@@ -78,10 +87,53 @@ export function openTelegramUser(link: string): boolean {
   return false;
 }
 
+export function shareRideToTelegram(shareUrl: string, text: string): boolean {
+  const tgShareUrl = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(text)}`;
+  try {
+    if (WebApp.initData && WebApp.initData.length > 0) {
+      WebApp.openTelegramLink(tgShareUrl);
+      return true;
+    }
+  } catch {
+    // Fallback to Web Share / clipboard outside Telegram
+  }
+  return false;
+}
+
 export function triggerHaptic(style: 'light' | 'medium' = 'light'): void {
   try {
     WebApp.HapticFeedback?.impactOccurred(style);
   } catch {
     // Ignore outside Telegram
   }
+}
+
+export function requestUserGeolocation(timeoutMs: number = 7000): Promise<LatLng> {
+  return new Promise((resolve, reject) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      reject(new Error('Геолокация недоступна в этом браузере'));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          reject(new Error('Доступ к геолокации запрещён'));
+        } else {
+          reject(new Error('Не удалось определить местоположение'));
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: timeoutMs,
+        maximumAge: 60_000,
+      }
+    );
+  });
 }
