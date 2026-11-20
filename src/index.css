@@ -5,6 +5,21 @@
   :root {
     --font-sans: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    --accent-primary: #059669;
+    --accent-hover: #047857;
+    --accent-fg: #FFFFFF;
+    --accent-text: #047857;
+    --accent-soft: rgba(16, 185, 129, 0.10);
+    --accent-border: rgba(5, 150, 105, 0.55);
+  }
+
+  html.dark {
+    --accent-primary: #10B981;
+    --accent-hover: #34D399;
+    --accent-fg: #052E16;
+    --accent-text: #34D399;
+    --accent-soft: rgba(16, 185, 129, 0.14);
+    --accent-border: rgba(16, 185, 129, 0.65);
   }
 
   html,
@@ -12,8 +27,6 @@
   #root {
     height: 100%;
     font-family: var(--font-sans);
-    background-color: #0B0E14;
-    color: #F1F5F9;
     -webkit-tap-highlight-color: transparent;
   }
 }
@@ -23,75 +36,150 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Custom Leaflet dark mode polish */
+/* Soft, low-glare Leaflet styling for selectable map themes */
 .leaflet-container {
-  background: #0B0E14;
+  background: #E2E8F0;
   font-family: var(--font-sans);
 }
 
-.podveznun-dark-tiles .leaflet-tile-pane {
-  filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(92%) saturate(70%);
+html.dark .leaflet-container {
+  background: #141B29;
+}
+
+/* 1. Twilight indigo night mode */
+.podvezun-map-twilight .leaflet-container {
+  background: #141B29;
+}
+.podvezun-map-twilight .leaflet-tile-pane {
+  filter: invert(90%) hue-rotate(192deg) brightness(106%) contrast(88%) saturate(58%);
+}
+
+/* 2. Deep teal / emerald night mode */
+.podvezun-map-aurora .leaflet-container {
+  background: #0E1F1C;
+}
+.podvezun-map-aurora .leaflet-tile-pane {
+  filter: invert(91%) hue-rotate(148deg) brightness(102%) contrast(90%) saturate(58%);
+}
+
+/* 3. Calm slate graphite monochrome night mode */
+.podvezun-map-graphite .leaflet-container {
+  background: #1B1E24;
+}
+.podvezun-map-graphite .leaflet-tile-pane {
+  filter: invert(92%) hue-rotate(180deg) brightness(100%) contrast(90%) grayscale(72%);
+}
+
+/* 4. Warm charcoal-amber night mode */
+.podvezun-map-ambernight .leaflet-container {
+  background: #211B16;
+}
+.podvezun-map-ambernight .leaflet-tile-pane {
+  filter: invert(91%) hue-rotate(205deg) sepia(34%) brightness(98%) contrast(90%) saturate(80%);
+}
+
+/* 5. Classic light OpenStreetMap */
+.podvezun-map-osm .leaflet-container {
+  background: #E2E8F0;
+}
+.podvezun-map-osm .leaflet-tile-pane {
+  filter: brightness(100%) contrast(98%) saturate(94%);
 }
 
 .leaflet-control-attribution {
-  background: rgba(11, 14, 20, 0.72) !important;
-  color: #64748B !important;
+  background: rgba(255, 255, 255, 0.82) !important;
+  color: #475569 !important;
   font-size: 10px !important;
   padding: 2px 6px !important;
   border-top-left-radius: 6px;
 }
 
 .leaflet-control-attribution a {
+  color: #334155 !important;
+}
+
+html.dark .leaflet-control-attribution {
+  background: rgba(11, 14, 20, 0.78) !important;
+  color: #64748B !important;
+}
+
+html.dark .leaflet-control-attribution a {
   color: #94A3B8 !important;
 }
 
 .leaflet-control-zoom {
-  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  border: 1px solid rgba(15, 23, 42, 0.14) !important;
   border-radius: 10px !important;
   overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12) !important;
 }
 
 .leaflet-control-zoom a {
-  background-color: #131822 !important;
-  color: #E2E8F0 !important;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14) !important;
+  background-color: #FFFFFF !important;
+  color: #0F172A !important;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.1) !important;
   width: 36px !important;
   height: 36px !important;
   line-height: 36px !important;
 }
 
 .leaflet-control-zoom a:hover {
+  background-color: #F1F5F9 !important;
+}
+
+html.dark .leaflet-control-zoom {
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+}
+
+html.dark .leaflet-control-zoom a {
+  background-color: #131822 !important;
+  color: #E2E8F0 !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14) !important;
+}
+
+html.dark .leaflet-control-zoom a:hover {
   background-color: #1E2634 !important;
   color: #FFFFFF !important;
 }
 
-.leaflet-tooltip.podveznun-tooltip {
-  background: #131822;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  color: #F8FAFC;
+.leaflet-tooltip.podvezun-tooltip {
+  background: #FFFFFF;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  color: #0F172A;
   border-radius: 8px;
   padding: 4px 8px;
   font-size: 12px;
   font-weight: 600;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.16);
+}
+
+.leaflet-tooltip.podvezun-tooltip::before {
+  border-top-color: #FFFFFF;
+}
+
+html.dark .leaflet-tooltip.podvezun-tooltip {
+  background: #131822;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: #F8FAFC;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
 }
 
-.leaflet-tooltip.podveznun-tooltip::before {
+html.dark .leaflet-tooltip.podvezun-tooltip::before {
   border-top-color: #131822;
 }
 
-/* Subtle custom scrollbar for dark theme */
-.dark-scroll::-webkit-scrollbar {
+/* Custom scrollbar */
+.theme-scroll::-webkit-scrollbar {
   width: 6px;
 }
-.dark-scroll::-webkit-scrollbar-track {
+.theme-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-.dark-scroll::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
+.theme-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.25);
   border-radius: 9999px;
 }
-.dark-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.36);
+.theme-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.42);
 }

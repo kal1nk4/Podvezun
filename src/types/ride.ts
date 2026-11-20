@@ -4,6 +4,12 @@ export type RideFilter = 'all' | 'driver' | 'passenger';
 
 export type AppView = 'feed' | 'mine';
 
+export type ThemeMode = 'light' | 'dark';
+
+export type AccentColorId = 'emerald' | 'sky' | 'indigo' | 'amber' | 'rose' | 'violet';
+
+export type MapStyleId = 'twilight' | 'aurora' | 'graphite' | 'ambernight' | 'osm';
+
 export interface LatLng {
   lat: number;
   lng: number;

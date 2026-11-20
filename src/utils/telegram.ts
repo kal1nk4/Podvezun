@@ -12,6 +12,16 @@ function getOrCreateGuestId(): string {
   return generated;
 }
 
+export function applyTelegramThemeColors(theme: 'light' | 'dark'): void {
+  const color = theme === 'dark' ? '#0B0E14' : '#F8FAFC';
+  try {
+    WebApp.setHeaderColor(color);
+    WebApp.setBackgroundColor(color);
+  } catch {
+    // Older Telegram clients may not support setHeaderColor
+  }
+}
+
 export function initTelegramWebApp(): TelegramUserProfile {
   let isTelegramEnv = false;
 
@@ -25,12 +35,7 @@ export function initTelegramWebApp(): TelegramUserProfile {
 
     WebApp.ready();
     WebApp.expand();
-    try {
-      WebApp.setHeaderColor('#0B0E14');
-      WebApp.setBackgroundColor('#0B0E14');
-    } catch {
-      // Older Telegram clients may not support setHeaderColor
-    }
+    applyTelegramThemeColors('dark');
 
     if (rawUser) {
       const firstName = rawUser.first_name || 'Попутчик';

@@ -135,36 +135,36 @@ export function CreateRideModal({
 
   return (
     <div
-      className="fixed inset-0 z-[1000] flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm sm:p-4"
+      className="fixed inset-0 z-[1000] flex items-end sm:items-center justify-center bg-slate-950/60 dark:bg-black/75 backdrop-blur-sm sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-ride-title"
     >
-      <div className="w-full sm:max-w-lg max-h-[92vh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-[#131822] border border-slate-800 shadow-2xl overflow-hidden">
+      <div className="w-full sm:max-w-lg max-h-[92vh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         {/* Grab handle on mobile */}
         <div className="sm:hidden pt-2.5 pb-1 flex justify-center shrink-0">
-          <div className="w-10 h-1.5 rounded-full bg-slate-700" />
+          <div className="w-10 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700" />
         </div>
 
         {/* Modal header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800/90 shrink-0">
-          <h2 id="create-ride-title" className="text-lg font-bold text-slate-100">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800/90 shrink-0">
+          <h2 id="create-ride-title" className="text-lg font-bold text-slate-900 dark:text-slate-100">
             Разместить маршрут
           </h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Закрыть окно создания заявки"
-            className="min-h-[44px] min-w-[44px] -mr-2 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors cursor-pointer"
+            className="min-h-[44px] min-w-[44px] -mr-2 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto dark-scroll p-5 space-y-5">
+        <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto theme-scroll p-5 space-y-5">
           {/* Role selector */}
           <fieldset>
-            <legend className="text-xs font-semibold text-slate-400 mb-2">
+            <legend className="text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">
               Ваша роль в поездке
             </legend>
             <div className="grid grid-cols-2 gap-2.5">
@@ -177,8 +177,8 @@ export function CreateRideModal({
                 aria-pressed={draft.role === 'driver'}
                 className={`min-h-[48px] px-3 py-2.5 rounded-xl border text-left flex items-center gap-2.5 transition-colors cursor-pointer ${
                   draft.role === 'driver'
-                    ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300'
-                    : 'bg-[#0B0E14] border-slate-800 text-slate-300 hover:border-slate-700'
+                    ? 'bg-emerald-50 border-emerald-600 text-emerald-800 dark:bg-emerald-500/15 dark:border-emerald-500 dark:text-emerald-300'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-slate-300 dark:bg-[#0B0E14] dark:border-slate-800 dark:text-slate-300 dark:hover:border-slate-700'
                 }`}
               >
                 <Car className="w-5 h-5 shrink-0" aria-hidden="true" />
@@ -197,8 +197,8 @@ export function CreateRideModal({
                 aria-pressed={draft.role === 'passenger'}
                 className={`min-h-[48px] px-3 py-2.5 rounded-xl border text-left flex items-center gap-2.5 transition-colors cursor-pointer ${
                   draft.role === 'passenger'
-                    ? 'bg-amber-400/15 border-amber-400 text-amber-200'
-                    : 'bg-[#0B0E14] border-slate-800 text-slate-300 hover:border-slate-700'
+                    ? 'bg-amber-50 border-amber-500 text-amber-900 dark:bg-amber-400/15 dark:border-amber-400 dark:text-amber-200'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-slate-300 dark:bg-[#0B0E14] dark:border-slate-800 dark:text-slate-300 dark:hover:border-slate-700'
                 }`}
               >
                 <Hand className="w-5 h-5 shrink-0" aria-hidden="true" />
@@ -214,13 +214,13 @@ export function CreateRideModal({
           <div className="space-y-3">
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label htmlFor="ride-from-select" className="text-xs font-semibold text-slate-300">
+                <label htmlFor="ride-from-select" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   Точка А — Откуда
                 </label>
                 <button
                   type="button"
                   onClick={handleSwapEndpoints}
-                  className="text-xs font-semibold text-slate-400 hover:text-slate-100 flex items-center gap-1 py-1 px-2 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-100 dark:hover:bg-slate-800 flex items-center gap-1 py-1 px-2 rounded-lg transition-colors cursor-pointer"
                 >
                   <ArrowUpDown className="w-3.5 h-3.5" aria-hidden="true" />
                   Поменять
@@ -231,7 +231,7 @@ export function CreateRideModal({
                   id="ride-from-select"
                   value={draft.fromName}
                   onChange={(e) => handleSelectLandmark('from', e.target.value)}
-                  className="flex-1 min-h-[46px] rounded-xl bg-[#0B0E14] border border-slate-800 px-3 text-sm text-slate-100 focus:outline-none focus:border-emerald-500"
+                  className="flex-1 min-h-[46px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[var(--accent-primary)]"
                 >
                   <option value="">Выберите район или ориентир</option>
                   {isCustomFrom && (
@@ -247,21 +247,21 @@ export function CreateRideModal({
                   type="button"
                   onClick={() => onStartMapPick('from')}
                   aria-label="Выбрать точку А на карте"
-                  className="min-h-[46px] px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-100 flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                  className="min-h-[46px] px-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
                 >
-                  <MapPin className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
+                  <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden="true" />
                   На карте
                 </button>
               </div>
               {errors.from && (
-                <p role="alert" className="mt-1 text-xs text-rose-400">
+                <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                   {errors.from}
                 </p>
               )}
             </div>
 
             <div>
-              <label htmlFor="ride-to-select" className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label htmlFor="ride-to-select" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 Точка Б — Куда
               </label>
               <div className="flex gap-2">
@@ -269,7 +269,7 @@ export function CreateRideModal({
                   id="ride-to-select"
                   value={draft.toName}
                   onChange={(e) => handleSelectLandmark('to', e.target.value)}
-                  className="flex-1 min-h-[46px] rounded-xl bg-[#0B0E14] border border-slate-800 px-3 text-sm text-slate-100 focus:outline-none focus:border-emerald-500"
+                  className="flex-1 min-h-[46px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[var(--accent-primary)]"
                 >
                   <option value="">Выберите район или ориентир</option>
                   {isCustomTo && (
@@ -285,14 +285,14 @@ export function CreateRideModal({
                   type="button"
                   onClick={() => onStartMapPick('to')}
                   aria-label="Выбрать точку Б на карте"
-                  className="min-h-[46px] px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-100 flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                  className="min-h-[46px] px-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
                 >
-                  <MapPin className="w-4 h-4 text-amber-300 shrink-0" aria-hidden="true" />
+                  <MapPin className="w-4 h-4 text-amber-600 dark:text-amber-300 shrink-0" aria-hidden="true" />
                   На карте
                 </button>
               </div>
               {errors.to && (
-                <p role="alert" className="mt-1 text-xs text-rose-400">
+                <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                   {errors.to}
                 </p>
               )}
@@ -301,7 +301,7 @@ export function CreateRideModal({
 
           {/* Departure time */}
           <div>
-            <span className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
               Время выезда
             </span>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -315,8 +315,8 @@ export function CreateRideModal({
                   }}
                   className={`min-h-[42px] px-2.5 rounded-xl border text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                     draft.departurePreset === preset
-                      ? 'bg-slate-100 text-slate-950 border-slate-100'
-                      : 'bg-[#0B0E14] text-slate-300 border-slate-800 hover:border-slate-700'
+                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-950 dark:border-slate-100'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300 dark:bg-[#0B0E14] dark:text-slate-300 dark:border-slate-800 dark:hover:border-slate-700'
                   }`}
                 >
                   {preset}
@@ -329,8 +329,8 @@ export function CreateRideModal({
                 }
                 className={`min-h-[42px] px-2.5 rounded-xl border text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   draft.departurePreset === 'custom'
-                    ? 'bg-slate-100 text-slate-950 border-slate-100'
-                    : 'bg-[#0B0E14] text-slate-300 border-slate-800 hover:border-slate-700'
+                    ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-950 dark:border-slate-100'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300 dark:bg-[#0B0E14] dark:text-slate-300 dark:border-slate-800 dark:hover:border-slate-700'
                 }`}
               >
                 Указать время
@@ -345,11 +345,11 @@ export function CreateRideModal({
                   onChangeDraft((prev) => ({ ...prev, customTime: e.target.value }));
                   setErrors((prev) => ({ ...prev, departureLabel: '' }));
                 }}
-                className="mt-2 w-full min-h-[44px] rounded-xl bg-[#0B0E14] border border-slate-800 px-3 text-sm text-slate-100 font-mono-tabular focus:outline-none focus:border-emerald-500"
+                className="mt-2 w-full min-h-[44px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 font-mono-tabular focus:outline-none focus:border-[var(--accent-primary)]"
               />
             )}
             {errors.departureLabel && (
-              <p role="alert" className="mt-1 text-xs text-rose-400">
+              <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                 {errors.departureLabel}
               </p>
             )}
@@ -358,7 +358,7 @@ export function CreateRideModal({
           {/* Price & Seats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label htmlFor="ride-price-input" className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label htmlFor="ride-price-input" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 Компенсация за место (₴)
               </label>
               <input
@@ -373,7 +373,7 @@ export function CreateRideModal({
                   setErrors((prev) => ({ ...prev, priceUah: '' }));
                 }}
                 placeholder="0 = бесплатно"
-                className="w-full min-h-[46px] rounded-xl bg-[#0B0E14] border border-slate-800 px-3 text-sm text-slate-100 font-mono-tabular focus:outline-none focus:border-emerald-500"
+                className="w-full min-h-[46px] rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 text-sm text-slate-900 dark:text-slate-100 font-mono-tabular focus:outline-none focus:border-[var(--accent-primary)]"
               />
               <div className="mt-1.5 flex gap-1.5">
                 {[0, 50, 100].map((val) => (
@@ -383,21 +383,21 @@ export function CreateRideModal({
                     onClick={() =>
                       onChangeDraft((prev) => ({ ...prev, priceUah: String(val) }))
                     }
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-mono-tabular text-slate-300 cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 text-[11px] font-mono-tabular dark:text-slate-300 cursor-pointer"
                   >
                     {val === 0 ? 'Бесплатно' : `${val} ₴`}
                   </button>
                 ))}
               </div>
               {errors.priceUah && (
-                <p role="alert" className="mt-1 text-xs text-rose-400">
+                <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                   {errors.priceUah}
                 </p>
               )}
             </div>
 
             <div>
-              <span className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 {draft.role === 'driver' ? 'Свободных мест' : 'Сколько человек'}
               </span>
               <div className="grid grid-cols-4 gap-2">
@@ -412,8 +412,8 @@ export function CreateRideModal({
                     aria-pressed={draft.seats === num}
                     className={`min-h-[46px] rounded-xl border font-mono-tabular text-sm font-bold transition-colors cursor-pointer ${
                       draft.seats === num
-                        ? 'bg-emerald-500 border-emerald-500 text-slate-950'
-                        : 'bg-[#0B0E14] border-slate-800 text-slate-200 hover:border-slate-700'
+                        ? 'bg-[var(--accent-primary)] border-[var(--accent-primary)] text-[var(--accent-fg)]'
+                        : 'bg-slate-50 border-slate-200 text-slate-800 hover:border-slate-300 dark:bg-[#0B0E14] dark:border-slate-800 dark:text-slate-200 dark:hover:border-slate-700'
                     }`}
                   >
                     {num}
@@ -425,7 +425,7 @@ export function CreateRideModal({
 
           {/* Comment */}
           <div>
-            <label htmlFor="ride-comment-input" className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <label htmlFor="ride-comment-input" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
               Короткий комментарий
             </label>
             <textarea
@@ -441,17 +441,17 @@ export function CreateRideModal({
                   ? 'Серый Lanos, еду по Полтавскому Шляху'
                   : 'Стою у входа в метро, с рюкзаком'
               }
-              className="w-full rounded-xl bg-[#0B0E14] border border-slate-800 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 resize-none"
+              className="w-full rounded-xl bg-slate-50 dark:bg-[#0B0E14] border border-slate-300 dark:border-slate-800 px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-[var(--accent-primary)] resize-none"
             />
             {errors.comment && (
-              <p role="alert" className="mt-1 text-xs text-rose-400">
+              <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                 {errors.comment}
               </p>
             )}
           </div>
 
           {submitError && (
-            <p role="alert" className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2">
+            <p role="alert" className="text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 rounded-xl px-3 py-2">
               {submitError}
             </p>
           )}
@@ -461,7 +461,7 @@ export function CreateRideModal({
             <button
               type="submit"
               disabled={submitting}
-              className="w-full min-h-[48px] rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 active:scale-[0.99] text-slate-950 font-bold text-sm transition-all cursor-pointer"
+              className="w-full min-h-[48px] rounded-xl bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] disabled:opacity-60 active:scale-[0.99] font-bold text-sm transition-all cursor-pointer"
             >
               {submitting ? 'Публикуем...' : 'Опубликовать маршрут'}
             </button>
