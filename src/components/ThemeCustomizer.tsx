@@ -45,7 +45,7 @@ export function ThemeCustomizer({
   }, [isPaletteOpen]);
 
   const currentAccent = ACCENT_THEMES.find((a) => a.id === accentColor) ?? ACCENT_THEMES[0];
-  const btnSize = compact ? 'min-h-[38px] min-w-[38px]' : 'min-h-[40px] min-w-[40px]';
+  const btnSize = compact ? 'min-h-[36px] min-w-[36px]' : 'min-h-[40px] min-w-[40px]';
 
   return (
     <div ref={containerRef} className="relative flex items-center gap-1.5 shrink-0">
@@ -59,7 +59,7 @@ export function ThemeCustomizer({
         aria-expanded={isPaletteOpen}
         aria-haspopup="menu"
         title={`Цвет оформления: ${currentAccent.label}`}
-        className={`${btnSize} px-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 dark:bg-[#131822] dark:hover:bg-slate-800 dark:border-slate-800 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer`}
+        className={`${btnSize} ${compact ? 'px-1.5 sm:px-2' : 'px-2'} rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 dark:bg-[#131822] dark:hover:bg-slate-800 dark:border-slate-800 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer`}
       >
         <Palette className="w-4 h-4 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
         <span

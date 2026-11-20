@@ -7,6 +7,7 @@ create table if not exists public.rides (
   id uuid primary key default gen_random_uuid(),
   role text not null check (role in ('driver', 'passenger')),
   author_id text not null,
+  creator_telegram_id bigint,
   author_name text not null,
   author_username text,
   author_photo_url text,
@@ -75,5 +76,43 @@ create policy "Public manage route alerts"
   using (true)
   with check (true);
 
+-- Лёгкие профили пользователей на базе Telegram WebApp
+create table if not exists public.profiles (
+  telegram_id bigint primary key,
+  first_name text not null,
+  username text,
+  role text not null default 'driver' check (role in ('driver', 'passenger', 'both')),
+  car_info text not null default '',
+  bio text not null default '',
+  completed_rides integer not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.profiles enable row level security;
+create policy "Public read and upsert profiles"
+  on public.profiles
+  for all
+  using (true)
+  with check (true);
+
+-- Быстрые теги доверия после поездки
+create table if not exists public.ride_feedback (
+  id uuid primary key default gen_random_uuid(),
+  ride_id text not null,
+  from_telegram_id bigint not null,
+  to_telegram_id bigint not null,
+  tag text not null,
+  created_at timestamptz not null default now(),
+  unique (ride_id, from_telegram_id)
+);
+
+alter table public.ride_feedback enable row level security;
+create policy "Public manage ride feedback"
+  on public.ride_feedback
+  for all
+  using (true)
+  with check (true);
+
 -- Включаем Realtime для мгновенного обновления карты и ленты
 alter publication supabase_realtime add table public.rides;
+

@@ -1,8 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Check, Crosshair, Layers, Loader2, LocateFixed, MessageCircle, Navigation, Route, Share2, X } from 'lucide-react';
-import type { AccentColorId, LatLng, MapStyleId, Ride } from '../types/ride';
+import {
+  Car,
+  Check,
+  CheckCircle2,
+  Crosshair,
+  Layers,
+  Loader2,
+  LocateFixed,
+  MessageCircle,
+  Navigation,
+  Route,
+  Share2,
+  X,
+} from 'lucide-react';
+import type {
+  AccentColorId,
+  FeedbackTagId,
+  LatLng,
+  MapStyleId,
+  Ride,
+  RideFeedback,
+  TelegramUserProfile,
+  UserProfile,
+} from '../types/ride';
 import {
   fetchRoadRoute,
   formatRouteStats,
@@ -11,9 +33,12 @@ import {
 } from '../utils/osrmRoute';
 import {
   buildTelegramLink,
+  FEEDBACK_TAGS,
   formatPriceUah,
   formatSeatsLabel,
   getTagLabel,
+  getTopFeedbackTags,
+  isRideCreatedByUser,
   KHARKIV_CENTER,
 } from '../utils/ridesLogic';
 import { openTelegramUser, triggerHaptic } from '../utils/telegram';
@@ -38,6 +63,11 @@ interface KharkivMapProps {
   locatingUser?: boolean;
   onLocateMe?: () => void;
   onShareRide?: (ride: Ride) => Promise<boolean>;
+  currentUser: TelegramUserProfile;
+  profilesByTelegramId: Record<number, UserProfile>;
+  feedbackByRecipient: Record<number, RideFeedback[]>;
+  onCompleteRide: (ride: Ride) => Promise<void>;
+  onSubmitFeedback: (ride: Ride, tag: FeedbackTagId) => Promise<void>;
 }
 
 function escapeHtml(text: string): string {
@@ -96,6 +126,11 @@ export function KharkivMap({
   locatingUser = false,
   onLocateMe,
   onShareRide,
+  currentUser,
+  profilesByTelegramId,
+  feedbackByRecipient,
+  onCompleteRide,
+  onSubmitFeedback,
 }: KharkivMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -110,6 +145,8 @@ export function KharkivMap({
   const onSelectRef = useRef(onSelectRide);
   const [isStyleMenuOpen, setIsStyleMenuOpen] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
+  const [completingRide, setCompletingRide] = useState(false);
+  const [submittingTag, setSubmittingTag] = useState<FeedbackTagId | null>(null);
   const [routeState, setRouteState] = useState<{
     rideId: string;
     loading: boolean;
@@ -403,7 +440,33 @@ export function KharkivMap({
     }
   }, [selectedRide, pickerTarget, routeState, accentPrimaryColor, isDark]);
 
-  const telegramHref = selectedRide ? buildTelegramLink(selectedRide.authorUsername) : null;
+  const selectedAuthorTelegramId = selectedRide?.creatorTelegramId ?? null;
+  const selectedAuthorProfile =
+    selectedAuthorTelegramId !== null
+      ? profilesByTelegramId[selectedAuthorTelegramId]
+      : undefined;
+  const selectedAuthorFeedback =
+    selectedAuthorTelegramId !== null
+      ? (feedbackByRecipient[selectedAuthorTelegramId] ?? [])
+      : [];
+  const selectedTopTags = getTopFeedbackTags(selectedAuthorFeedback, 2);
+  const isSelectedRideMine = selectedRide
+    ? isRideCreatedByUser(selectedRide, currentUser)
+    : false;
+  const existingUserFeedback = selectedRide
+    ? selectedAuthorFeedback.find(
+        (fb) =>
+          fb.rideId === selectedRide.id &&
+          fb.fromTelegramId === currentUser.telegramId
+      )
+    : undefined;
+
+  const telegramHref = selectedRide
+    ? buildTelegramLink(
+        selectedRide.authorUsername ?? selectedAuthorProfile?.username,
+        selectedAuthorTelegramId
+      )
+    : null;
   const activeRouteState =
     selectedRide && routeState?.rideId === selectedRide.id ? routeState : null;
   const routeStatsLabel = activeRouteState?.result
@@ -432,11 +495,11 @@ export function KharkivMap({
             aria-expanded={isStyleMenuOpen}
             aria-haspopup="menu"
             aria-label="Выбрать стиль карты"
-            className="min-h-[46px] px-3.5 rounded-2xl bg-white/92 dark:bg-[#131822]/92 border border-slate-200 dark:border-slate-700/80 shadow-xl backdrop-blur-md text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-[#1A2130] flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
+            className="min-h-[42px] min-w-[42px] px-2.5 sm:min-h-[46px] sm:px-3.5 rounded-2xl bg-white/92 dark:bg-[#131822]/92 border border-slate-200 dark:border-slate-700/80 shadow-xl backdrop-blur-md text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-[#1A2130] flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
           >
             <Layers className="w-4 h-4 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
             <span className="hidden sm:inline">{currentStyle.label}</span>
-            <span className="sm:hidden">Карта</span>
+            <span className="hidden min-[380px]:inline sm:hidden">Карта</span>
           </button>
 
           {isStyleMenuOpen && (
@@ -596,11 +659,11 @@ export function KharkivMap({
       {/* Compact selected ride route card overlaid on map */}
       {selectedRide && !pickerTarget && (
         <div
-          className="absolute bottom-3 left-3 right-3 sm:right-auto sm:max-w-sm z-[500] rounded-2xl bg-white/95 dark:bg-[#131822]/95 border border-slate-200 dark:border-slate-700/80 p-3.5 shadow-2xl backdrop-blur-md"
+          className="absolute bottom-3 left-3 right-3 sm:right-auto sm:w-[390px] max-h-[calc(100%-64px)] overflow-y-auto theme-scroll z-[500] rounded-2xl bg-white/95 dark:bg-[#131822]/95 border border-slate-200 dark:border-slate-700/80 p-3.5 shadow-2xl backdrop-blur-md"
           data-testid="map-selected-ride-card"
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <span
                   className={
@@ -612,45 +675,35 @@ export function KharkivMap({
                   {selectedRide.role === 'driver' ? 'Водитель' : 'Пассажир'}
                 </span>
                 <span aria-hidden="true">·</span>
-                <span>{selectedRide.authorName}</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono-tabular text-slate-700 dark:text-slate-300">
+                <span className="font-mono-tabular text-slate-800 dark:text-slate-200 font-semibold">
                   {formatPriceUah(selectedRide.priceUah)}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono-tabular">
+                  {selectedRide.departureLabel}
                 </span>
               </div>
               <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                 {selectedRide.fromName} → {selectedRide.toName}
               </p>
-              <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400 font-mono-tabular">
-                Выезд: {selectedRide.departureLabel} · {formatSeatsLabel(selectedRide.seats, selectedRide.role)}
-              </p>
-              <div
-                className="mt-1.5 flex items-center gap-1.5 text-xs min-h-[18px]"
-                data-testid="selected-route-stats"
-              >
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600 dark:text-slate-400 font-mono-tabular">
+                <span>{formatSeatsLabel(selectedRide.seats, selectedRide.role)}</span>
                 {activeRouteState?.loading ? (
-                  <>
-                    <Loader2
-                      className="w-3.5 h-3.5 text-[var(--accent-text)] animate-spin shrink-0"
-                      aria-hidden="true"
-                    />
-                    <span className="text-slate-500 dark:text-slate-400 font-medium">
-                      Строим маршрут по дорогам...
-                    </span>
-                  </>
+                  <span className="inline-flex items-center gap-1 font-sans text-slate-500 dark:text-slate-400">
+                    <Loader2 className="w-3 h-3 text-[var(--accent-text)] animate-spin" aria-hidden="true" />
+                    Маршрут...
+                  </span>
                 ) : routeStatsLabel ? (
-                  <>
-                    <Route
-                      className="w-3.5 h-3.5 text-[var(--accent-text)] shrink-0"
-                      aria-hidden="true"
-                    />
-                    <span className="font-mono-tabular font-semibold text-slate-800 dark:text-slate-200">
-                      {routeStatsLabel}
-                    </span>
-                  </>
+                  <span
+                    className="inline-flex items-center gap-1 font-semibold text-slate-800 dark:text-slate-200"
+                    data-testid="selected-route-stats"
+                  >
+                    <Route className="w-3 h-3 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+                    {routeStatsLabel}
+                  </span>
                 ) : activeRouteState?.result?.isFallback ? (
-                  <span className="text-slate-500 dark:text-slate-400">
-                    Прямой ориентир маршрута
+                  <span className="font-sans text-slate-500 dark:text-slate-400" data-testid="selected-route-stats">
+                    Прямой ориентир
                   </span>
                 ) : null}
               </div>
@@ -659,26 +712,124 @@ export function KharkivMap({
               type="button"
               onClick={() => onSelectRide(null)}
               aria-label="Скрыть маршрут"
-              className="min-h-[44px] min-w-[44px] -mt-1.5 -mr-1.5 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer"
+              className="min-h-[40px] min-w-[40px] -mt-1.5 -mr-1.5 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
+          {/* Author mini-block: name, car (for driver), completed rides count, top-2 trust tags */}
+          <div
+            className="mt-2 rounded-xl bg-slate-50 dark:bg-[#0B0E14]/90 border border-slate-200/80 dark:border-slate-800 px-2.5 py-2 space-y-1"
+            data-testid="selected-ride-author-card"
+          >
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-bold text-slate-900 dark:text-slate-100 truncate">
+                {selectedAuthorProfile?.firstName || selectedRide.authorName}
+              </span>
+              <span className="font-mono-tabular text-[11px] font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap shrink-0">
+                Поездок: {selectedAuthorProfile?.completedRides ?? 0}
+              </span>
+            </div>
+
+            {selectedRide.role === 'driver' && selectedAuthorProfile?.carInfo && (
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300 truncate">
+                <Car className="w-3.5 h-3.5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+                <span className="truncate">{selectedAuthorProfile.carInfo}</span>
+              </div>
+            )}
+
+            {selectedTopTags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                {selectedTopTags.map((item) => (
+                  <span
+                    key={item.tag}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[11px] font-semibold text-slate-800 dark:text-slate-100"
+                  >
+                    <span>{item.tag}</span>
+                    <span className="font-mono-tabular text-[var(--accent-text)]">
+                      · {item.count}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
           {selectedRide.tags && selectedRide.tags.length > 0 && (
-            <p className="mt-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            <p className="mt-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
               {selectedRide.tags.map((t) => getTagLabel(t)).join(' · ')}
             </p>
           )}
 
           {selectedRide.comment && (
-            <p className="mt-1.5 text-xs text-slate-700 dark:text-slate-300 line-clamp-2 leading-relaxed">
+            <p className="mt-1 text-xs text-slate-700 dark:text-slate-300 line-clamp-2 leading-relaxed">
               {selectedRide.comment}
             </p>
           )}
 
+          {/* Quick feedback tags for other users (not author) */}
+          {!isSelectedRideMine && selectedAuthorTelegramId !== null && (
+            <div
+              className="mt-2 pt-2 border-t border-slate-200/70 dark:border-slate-800/80"
+              data-testid="ride-feedback-block"
+            >
+              {existingUserFeedback ? (
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--accent-text)]">
+                  <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  <span>Ваша отметка: {existingUserFeedback.tag}</span>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <span className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    Отметить попутчика:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {FEEDBACK_TAGS.map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        disabled={submittingTag !== null}
+                        onClick={() => {
+                          triggerHaptic('medium');
+                          setSubmittingTag(tag);
+                          void onSubmitFeedback(selectedRide, tag).finally(() => {
+                            setSubmittingTag(null);
+                          });
+                        }}
+                        className="min-h-[30px] px-2.5 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-[11px] font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {submittingTag === tag ? '...' : tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mt-2.5 flex items-center gap-2">
-            {telegramHref ? (
+            {isSelectedRideMine ? (
+              <button
+                type="button"
+                disabled={completingRide}
+                onClick={() => {
+                  triggerHaptic('medium');
+                  setCompletingRide(true);
+                  void onCompleteRide(selectedRide).finally(() => {
+                    setCompletingRide(false);
+                  });
+                }}
+                className="flex-1 min-h-[42px] px-3.5 rounded-xl bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-60"
+              >
+                {completingRide ? (
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                )}
+                Завершить поездку
+              </button>
+            ) : telegramHref ? (
               <a
                 href={telegramHref}
                 target="_blank"
@@ -688,14 +839,14 @@ export function KharkivMap({
                     e.preventDefault();
                   }
                 }}
-                className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
+                className="flex-1 min-h-[42px] px-3.5 rounded-xl bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
               >
                 <MessageCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
                 Написать в Telegram
               </a>
             ) : (
               <span className="flex-1 min-h-[40px] px-3 rounded-xl bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 text-xs font-medium flex items-center justify-center">
-                Telegram @username не указан
+                Telegram не привязан
               </span>
             )}
             {onShareRide && (
@@ -711,7 +862,7 @@ export function KharkivMap({
                 }}
                 aria-label="Поделиться маршрутом"
                 title="Поделиться маршрутом"
-                className="min-h-[44px] min-w-[44px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+                className="min-h-[42px] min-w-[42px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
               >
                 {sharedCopied ? (
                   <Check className="w-4 h-4 text-[var(--accent-text)]" aria-hidden="true" />
@@ -731,13 +882,13 @@ export function KharkivMap({
                   const bounds = L.latLngBounds(fitPoints);
                   mapRef.current.fitBounds(bounds, {
                     paddingTopLeft: [48, 72],
-                    paddingBottomRight: [48, 245],
+                    paddingBottomRight: [48, 255],
                     maxZoom: 15,
                   });
                 }
               }}
               aria-label="Центрировать маршрут на карте"
-              className="min-h-[44px] min-w-[44px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+              className="min-h-[42px] min-w-[42px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
             >
               <Navigation className="w-4 h-4" aria-hidden="true" />
             </button>

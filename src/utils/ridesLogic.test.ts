@@ -1,26 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  aggregateFeedbackTags,
   ALL_KHARKIV_POINTS,
   buildShareRideLink,
   buildShareRideText,
   buildTelegramLink,
   computeExtendedExpiresAt,
   describePickedCoordinates,
+  FEEDBACK_TAGS,
   filterActiveRides,
   findMatchingWatchedRides,
   formatDistanceFromUser,
   formatPriceUah,
+  getTopFeedbackTags,
   haversineDistanceKm,
+  isRideCreatedByUser,
   isRideExpired,
   KHARKIV_HUBS,
   KHARKIV_LANDMARKS,
   parseSharedRideId,
   RIDE_EXTEND_STEP_MS,
   RIDE_TTL_MS,
+  validateProfileInput,
   validateRideInput,
 } from './ridesLogic';
-import type { Ride, RouteWatchAlert } from '../types/ride';
+import type { Ride, RideFeedback, RouteWatchAlert } from '../types/ride';
 
 const NOW = Date.parse('2026-11-19T18:00:00.000Z');
 
@@ -250,3 +255,71 @@ test('describePickedCoordinates recognizes nearby Kharkiv landmarks', () => {
   const farAway = describePickedCoordinates(50.11, 36.55);
   assert.match(farAway, /Метка/);
 });
+
+test('buildTelegramLink supports tg://user?id fallback when username is absent', () => {
+  assert.equal(buildTelegramLink(null, 999999), 'tg://user?id=999999');
+  assert.equal(buildTelegramLink('test_driver', 999999), 'https://t.me/test_driver');
+  assert.equal(buildTelegramLink(null, null), null);
+});
+
+test('isRideCreatedByUser matches both creatorTelegramId and authorId', () => {
+  assert.equal(
+    isRideCreatedByUser(
+      { authorId: '999999', creatorTelegramId: 999999 },
+      { id: '999999', telegramId: 999999 }
+    ),
+    true
+  );
+  assert.equal(
+    isRideCreatedByUser(
+      { authorId: 'other', creatorTelegramId: 999999 },
+      { id: '999999', telegramId: 999999 }
+    ),
+    true
+  );
+  assert.equal(
+    isRideCreatedByUser(
+      { authorId: '10042', creatorTelegramId: 10042 },
+      { id: '999999', telegramId: 999999 }
+    ),
+    false
+  );
+});
+
+test('aggregateFeedbackTags and getTopFeedbackTags count and sort trust tags cleanly', () => {
+  assert.equal(FEEDBACK_TAGS.length, 4);
+  const sampleFeedback: Pick<RideFeedback, 'tag'>[] = [
+    { tag: 'По пути' },
+    { tag: 'Вовремя' },
+    { tag: 'Вовремя' },
+    { tag: 'Вовремя' },
+    { tag: 'Всё ок' },
+    { tag: 'По пути' },
+    { tag: 'Приятный попутчик' },
+  ];
+  const all = aggregateFeedbackTags(sampleFeedback);
+  assert.deepEqual(all, [
+    { tag: 'Вовремя', count: 3 },
+    { tag: 'По пути', count: 2 },
+    { tag: 'Всё ок', count: 1 },
+    { tag: 'Приятный попутчик', count: 1 },
+  ]);
+  const top2 = getTopFeedbackTags(sampleFeedback, 2);
+  assert.deepEqual(top2, [
+    { tag: 'Вовремя', count: 3 },
+    { tag: 'По пути', count: 2 },
+  ]);
+});
+
+test('validateProfileInput enforces 120 char bio limit and valid roles', () => {
+  assert.equal(
+    validateProfileInput({ role: 'both', carInfo: 'Серый Ланос', bio: 'Езжу утром на работу' })
+      .valid,
+    true
+  );
+  assert.equal(
+    validateProfileInput({ role: 'passenger', carInfo: '', bio: 'a'.repeat(121) }).valid,
+    false
+  );
+});
+

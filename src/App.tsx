@@ -6,14 +6,24 @@ import {
   Plus,
   RotateCcw,
   Route,
+  User as UserIcon,
   WifiOff,
   X,
 } from 'lucide-react';
 import { CreateRideModal, type CreateRideDraft } from './components/CreateRideModal';
 import { KharkivMap, type MapPickerTarget } from './components/KharkivMap';
+import { ProfileView } from './components/ProfileView';
 import { RideCard } from './components/RideCard';
 import { RouteRadarModal } from './components/RouteRadarModal';
 import { ThemeCustomizer } from './components/ThemeCustomizer';
+import {
+  fetchFeedbackForUsers,
+  fetchProfilesByTelegramIds,
+  incrementCompletedRides,
+  saveUserProfile,
+  submitRideFeedback,
+  upsertUserProfileOnLogin,
+} from './services/profileService';
 import {
   createRide,
   deleteRideById,
@@ -28,13 +38,17 @@ import type {
   AccentColorId,
   AppView,
   CreateRidePayload,
+  FeedbackTagId,
   LatLng,
   MapStyleId,
+  ProfileRole,
   Ride,
+  RideFeedback,
   RideFilter,
   RouteWatchAlert,
   TelegramUserProfile,
   ThemeMode,
+  UserProfile,
 } from './types/ride';
 import {
   ALL_KHARKIV_POINTS,
@@ -43,6 +57,7 @@ import {
   describePickedCoordinates,
   filterActiveRides,
   findMatchingWatchedRides,
+  isRideCreatedByUser,
   parseSharedRideId,
 } from './utils/ridesLogic';
 import {
@@ -135,6 +150,23 @@ export default function App() {
   const [pickerTarget, setPickerTarget] = useState<MapPickerTarget>(null);
   const [draft, setDraft] = useState<CreateRideDraft>(INITIAL_DRAFT);
 
+  // User profile & social trust state
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => ({
+    telegramId: user.telegramId,
+    firstName: user.firstName,
+    username: user.username,
+    role: 'driver',
+    carInfo: '',
+    bio: '',
+    completedRides: 0,
+  }));
+  const [profilesByTelegramId, setProfilesByTelegramId] = useState<
+    Record<number, UserProfile>
+  >({});
+  const [feedbackByRecipient, setFeedbackByRecipient] = useState<
+    Record<number, RideFeedback[]>
+  >({});
+
   // Route Radar watch alerts
   const [alerts, setAlerts] = useState<RouteWatchAlert[]>(readWatchedAlerts);
   const [isRadarOpen, setIsRadarOpen] = useState(false);
@@ -219,6 +251,46 @@ export default function App() {
     };
   }, [loadRides]);
 
+  // Upsert current Telegram user into Supabase profiles on launch
+  useEffect(() => {
+    let active = true;
+    void upsertUserProfileOnLogin(user).then((prof) => {
+      if (!active) return;
+      setUserProfile(prof);
+      setProfilesByTelegramId((prev) => ({ ...prev, [prof.telegramId]: prof }));
+    });
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  // Fetch profiles and trust feedback tags for all visible ride authors + current user
+  const refreshSocialTrustData = useCallback(
+    async (rideList: Ride[]) => {
+      const ids = new Set<number>([user.telegramId]);
+      for (const ride of rideList) {
+        if (typeof ride.creatorTelegramId === 'number' && ride.creatorTelegramId > 0) {
+          ids.add(ride.creatorTelegramId);
+        }
+      }
+      const idList = Array.from(ids);
+      const [profilesMap, feedbackRes] = await Promise.all([
+        fetchProfilesByTelegramIds(idList),
+        fetchFeedbackForUsers(idList),
+      ]);
+      setProfilesByTelegramId((prev) => ({ ...prev, ...profilesMap }));
+      if (profilesMap[user.telegramId]) {
+        setUserProfile(profilesMap[user.telegramId]);
+      }
+      setFeedbackByRecipient(feedbackRes.byRecipient);
+    },
+    [user.telegramId]
+  );
+
+  useEffect(() => {
+    void refreshSocialTrustData(rides);
+  }, [rides, refreshSocialTrustData]);
+
   // Select ride automatically if opened via shared link (?ride=... or start_param=ride_...)
   useEffect(() => {
     if (deepLinkHandledRef.current || rides.length === 0) return;
@@ -248,25 +320,13 @@ export default function App() {
     () =>
       filterActiveRides(rides, {
         roleFilter: 'all',
-        onlyMineUserId: user.id,
         nowMs: nowTick,
-      }),
-    [rides, user.id, nowTick]
+      }).filter((r) => isRideCreatedByUser(r, user)),
+    [rides, user, nowTick]
   );
 
   const visibleRides = useMemo(() => {
-    if (appView === 'mine') {
-      return filterActiveRides(rides, {
-        roleFilter,
-        onlyMineUserId: user.id,
-        fromDistrict,
-        toDistrict,
-        userLocation,
-        sortByProximity,
-        nowMs: nowTick,
-      });
-    }
-    return filterActiveRides(rides, {
+    const base = filterActiveRides(rides, {
       roleFilter,
       fromDistrict,
       toDistrict,
@@ -274,6 +334,10 @@ export default function App() {
       sortByProximity,
       nowMs: nowTick,
     });
+    if (appView === 'mine') {
+      return base.filter((r) => isRideCreatedByUser(r, user));
+    }
+    return base;
   }, [
     rides,
     appView,
@@ -282,7 +346,7 @@ export default function App() {
     toDistrict,
     userLocation,
     sortByProximity,
-    user.id,
+    user,
     nowTick,
   ]);
 
@@ -372,6 +436,15 @@ export default function App() {
   const handleOpenCreate = () => {
     triggerHaptic('light');
     setPickerTarget(null);
+    const defaultRole = userProfile.role === 'passenger' ? 'passenger' : 'driver';
+    setDraft((prev) => ({
+      ...prev,
+      role: defaultRole,
+      comment:
+        defaultRole === 'driver' && !prev.comment.trim() && userProfile.carInfo
+          ? userProfile.carInfo
+          : prev.comment,
+    }));
     setIsCreateOpen(true);
   };
 
@@ -394,6 +467,65 @@ export default function App() {
     if (selectedRide?.id === rideId) {
       setSelectedRide(null);
     }
+  };
+
+  const handleCompleteRide = async (ride: Ride) => {
+    await deleteRideById(ride.id, user.id);
+    setRides((prev) => prev.filter((r) => r.id !== ride.id));
+    if (selectedRide?.id === ride.id) {
+      setSelectedRide(null);
+    }
+    const nextCompleted = await incrementCompletedRides(user.telegramId);
+    setUserProfile((prev) => ({ ...prev, completedRides: nextCompleted }));
+    setProfilesByTelegramId((prev) => ({
+      ...prev,
+      [user.telegramId]: {
+        ...(prev[user.telegramId] ?? userProfile),
+        completedRides: nextCompleted,
+      },
+    }));
+  };
+
+  const handleSaveProfile = async (input: {
+    role: ProfileRole;
+    carInfo: string;
+    bio: string;
+  }) => {
+    const saved = await saveUserProfile({
+      telegramId: userProfile.telegramId,
+      firstName: userProfile.firstName,
+      username: userProfile.username,
+      role: input.role,
+      carInfo: input.carInfo,
+      bio: input.bio,
+      completedRides: userProfile.completedRides,
+    });
+    setUserProfile(saved);
+    setProfilesByTelegramId((prev) => ({
+      ...prev,
+      [saved.telegramId]: saved,
+    }));
+  };
+
+  const handleSubmitFeedback = async (ride: Ride, tag: FeedbackTagId) => {
+    const toTelegramId = ride.creatorTelegramId;
+    if (!toTelegramId || toTelegramId === user.telegramId) return;
+    const saved = await submitRideFeedback({
+      rideId: ride.id,
+      fromTelegramId: user.telegramId,
+      toTelegramId,
+      tag,
+    });
+    setFeedbackByRecipient((prev) => {
+      const existing = prev[toTelegramId] ?? [];
+      if (existing.some((f) => f.id === saved.id || (f.rideId === saved.rideId && f.fromTelegramId === saved.fromTelegramId))) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [toTelegramId]: [saved, ...existing],
+      };
+    });
   };
 
   const handleUpdateSeats = async (rideId: string, nextSeats: number) => {
@@ -510,42 +642,33 @@ export default function App() {
           : 'lg:grid lg:grid-cols-[1fr_440px] xl:grid-cols-[1fr_480px]'
       }`}
     >
-      {/* Compact mobile header */}
-      <header className="lg:hidden h-12 px-3 sm:px-4 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] flex items-center justify-between gap-2 shrink-0 z-30">
-        <div className="flex items-center gap-2 min-w-0">
-          <Route className="w-5 h-5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
-          <span className="text-base font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap">
+      {/* Compact mobile header: Brand + Explicit Profile shortcut + Theme */}
+      <header className="lg:hidden px-3 py-2 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] flex items-center justify-between gap-2 shrink-0 z-30">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+          <Route className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+          <span className="text-[15px] sm:text-base font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap">
             Подвезун
           </span>
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          <nav aria-label="Разделы" className="flex items-center gap-1 bg-slate-100 dark:bg-[#131822] p-1 rounded-xl border border-slate-200 dark:border-slate-800">
-            <button
-              type="button"
-              onClick={() => setAppView('feed')}
-              aria-pressed={appView === 'feed'}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                appView === 'feed'
-                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-              }`}
-            >
-              Лента
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppView('mine')}
-              aria-pressed={appView === 'mine'}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                appView === 'mine'
-                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-              }`}
-            >
-              Мои ({myRides.length})
-            </button>
-          </nav>
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic('light');
+              setAppView('profile');
+            }}
+            aria-label="Открыть профиль"
+            aria-pressed={appView === 'profile'}
+            className={`min-h-[36px] px-2 sm:px-2.5 rounded-xl border text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+              appView === 'profile'
+                ? 'bg-[var(--accent-primary)] border-[var(--accent-primary)] text-[var(--accent-fg)]'
+                : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-800 dark:bg-[#131822] dark:hover:bg-slate-800 dark:border-slate-800 dark:text-slate-100'
+            }`}
+          >
+            <UserIcon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span>Профиль</span>
+          </button>
 
           <ThemeCustomizer
             theme={theme}
@@ -557,11 +680,68 @@ export default function App() {
         </div>
       </header>
 
-      {/* Interactive Kharkiv Map (hidden cleanly in low-data blackout mode) */}
+      {/* Dedicated mobile 3-tab switcher (always visible & spacious on any phone width) */}
+      <nav
+        aria-label="Разделы"
+        className="lg:hidden px-3 py-1.5 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] shrink-0 z-20"
+      >
+        <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-[#131822] p-1 rounded-xl border border-slate-200 dark:border-slate-800">
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic('light');
+              setAppView('feed');
+            }}
+            aria-pressed={appView === 'feed'}
+            className={`min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center ${
+              appView === 'feed'
+                ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+            }`}
+          >
+            Лента
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic('light');
+              setAppView('mine');
+            }}
+            aria-pressed={appView === 'mine'}
+            className={`min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center ${
+              appView === 'mine'
+                ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+            }`}
+          >
+            Мои ({myRides.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic('light');
+              setAppView('profile');
+            }}
+            aria-pressed={appView === 'profile'}
+            className={`min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1 ${
+              appView === 'profile'
+                ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+            }`}
+          >
+            <UserIcon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span>Профиль</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* Interactive Kharkiv Map (hidden cleanly in low-data mode, and collapsed on mobile when viewing Profile) */}
       {!lowDataMode && (
         <section
           aria-label="Карта попутчиков Харькова"
-          className="relative h-[50dvh] min-h-[260px] lg:h-full w-full shrink-0 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800/80"
+          className={`relative h-[43dvh] min-h-[225px] sm:h-[46dvh] lg:h-full w-full shrink-0 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800/80 ${
+            appView === 'profile' ? 'hidden lg:block' : ''
+          }`}
         >
           {/* Top role filter segmented control */}
           {!pickerTarget && (
@@ -580,7 +760,7 @@ export default function App() {
                       setRoleFilter(btn.id);
                     }}
                     aria-pressed={roleFilter === btn.id}
-                    className={`min-h-[38px] px-3.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    className={`min-h-[34px] sm:min-h-[38px] px-2 sm:px-3.5 rounded-xl text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       roleFilter === btn.id
                         ? 'bg-[var(--accent-primary)] text-[var(--accent-fg)] font-bold'
                         : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800/70'
@@ -618,6 +798,11 @@ export default function App() {
             locatingUser={locatingUser}
             onLocateMe={() => void handleLocateOnMap()}
             onShareRide={handleShareRide}
+            currentUser={user}
+            profilesByTelegramId={profilesByTelegramId}
+            feedbackByRecipient={feedbackByRecipient}
+            onCompleteRide={handleCompleteRide}
+            onSubmitFeedback={handleSubmitFeedback}
           />
         </section>
       )}
@@ -629,41 +814,14 @@ export default function App() {
         }`}
       >
         {/* Desktop Top Header inside sidebar */}
-        <header className="hidden lg:flex items-center justify-between gap-2 px-5 py-4 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <Route className="w-5 h-5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
-            <h1 className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap">
-              Подвезун
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-1.5 shrink-0">
-            <nav aria-label="Разделы" className="flex items-center gap-1 bg-slate-100 dark:bg-[#131822] p-1 rounded-xl border border-slate-200 dark:border-slate-800 shrink-0">
-              <button
-                type="button"
-                onClick={() => setAppView('feed')}
-                aria-pressed={appView === 'feed'}
-                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                  appView === 'feed'
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950'
-                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-                }`}
-              >
-                Лента
-              </button>
-              <button
-                type="button"
-                onClick={() => setAppView('mine')}
-                aria-pressed={appView === 'mine'}
-                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                  appView === 'mine'
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950'
-                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-                }`}
-              >
-                Мои заявки ({myRides.length})
-              </button>
-            </nav>
+        <header className="hidden lg:block px-5 pt-3.5 pb-3 space-y-2.5 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Route className="w-5 h-5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+              <h1 className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                Подвезун
+              </h1>
+            </div>
 
             <ThemeCustomizer
               theme={theme}
@@ -672,10 +830,63 @@ export default function App() {
               onChangeAccent={handleChangeAccentColor}
             />
           </div>
+
+          <nav
+            aria-label="Разделы"
+            className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-[#131822] p-1 rounded-xl border border-slate-200 dark:border-slate-800"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                setAppView('feed');
+              }}
+              aria-pressed={appView === 'feed'}
+              className={`min-h-[38px] px-2.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center ${
+                appView === 'feed'
+                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+              }`}
+            >
+              Лента
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                setAppView('mine');
+              }}
+              aria-pressed={appView === 'mine'}
+              className={`min-h-[38px] px-2.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center ${
+                appView === 'mine'
+                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+              }`}
+            >
+              Мои ({myRides.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                setAppView('profile');
+              }}
+              aria-pressed={appView === 'profile'}
+              className={`min-h-[38px] px-2.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
+                appView === 'profile'
+                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+              }`}
+            >
+              <UserIcon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>Профиль</span>
+            </button>
+          </nav>
         </header>
 
-        {/* Sub-header + Utility Tools + District & Proximity Filter Bar */}
-        <div className="px-4 lg:px-5 pt-2.5 pb-2.5 space-y-2 border-b border-slate-200/70 dark:border-slate-800/70 shrink-0">
+        {/* Sub-header + Utility Tools + District & Proximity Filter Bar (hidden on Profile tab) */}
+        {appView !== 'profile' && (
+          <div className="px-4 lg:px-5 pt-2.5 pb-2.5 space-y-2 border-b border-slate-200/70 dark:border-slate-800/70 shrink-0">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 text-xs text-slate-500 dark:text-slate-400">
               <span className="truncate">
@@ -888,11 +1099,20 @@ export default function App() {
               </div>
             </div>
           )}
-        </div>
+          </div>
+        )}
 
-        {/* Scrollable Ride Cards Feed */}
+        {/* Scrollable Ride Cards Feed or Profile View */}
         <div className="flex-1 min-h-0 overflow-y-auto theme-scroll px-4 lg:px-5 pt-3 pb-4 space-y-3">
-          {loading ? (
+          {appView === 'profile' ? (
+            <ProfileView
+              profile={userProfile}
+              feedbackList={feedbackByRecipient[userProfile.telegramId] ?? []}
+              isFallbackDemo={user.isFallbackDemo}
+              photoUrl={user.photoUrl}
+              onSaveProfile={handleSaveProfile}
+            />
+          ) : loading ? (
             <div className="space-y-3" aria-label="Загрузка заявок">
               {[1, 2, 3].map((item) => (
                 <div
@@ -931,7 +1151,12 @@ export default function App() {
                 key={ride.id}
                 ride={ride}
                 isSelected={selectedRide?.id === ride.id}
-                isMine={ride.authorId === user.id}
+                isMine={isRideCreatedByUser(ride, user)}
+                authorProfile={
+                  typeof ride.creatorTelegramId === 'number'
+                    ? profilesByTelegramId[ride.creatorTelegramId]
+                    : undefined
+                }
                 userLocation={sortByProximity ? userLocation : null}
                 lowDataMode={lowDataMode}
                 onSelect={(r) => setSelectedRide(r)}
@@ -961,6 +1186,7 @@ export default function App() {
         isOpen={isCreateOpen}
         isPickingOnMap={Boolean(pickerTarget)}
         draft={draft}
+        savedCarInfo={userProfile.carInfo}
         onChangeDraft={setDraft}
         onStartMapPick={(target) => setPickerTarget(target)}
         onClose={() => {

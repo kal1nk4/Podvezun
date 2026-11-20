@@ -1,16 +1,37 @@
 import WebApp from '@twa-dev/sdk';
 import type { LatLng, TelegramUserProfile } from '../types/ride';
 
-const GUEST_ID_STORAGE_KEY = 'podveznun_guest_author_id';
-
-function getOrCreateGuestId(): string {
-  if (typeof window === 'undefined') return 'guest_local';
-  const existing = window.localStorage.getItem(GUEST_ID_STORAGE_KEY);
-  if (existing) return existing;
-  const generated = `guest_${Math.random().toString(36).slice(2, 10)}`;
-  window.localStorage.setItem(GUEST_ID_STORAGE_KEY, generated);
-  return generated;
+interface RawTelegramUser {
+  id?: number | string;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
 }
+
+interface WindowWithTelegram {
+  Telegram?: {
+    WebApp?: {
+      initData?: string;
+      initDataUnsafe?: {
+        user?: RawTelegramUser;
+        start_param?: string;
+      };
+    };
+  };
+}
+
+export const FALLBACK_PREVIEW_USER: TelegramUserProfile = {
+  id: '999999',
+  telegramId: 999999,
+  firstName: 'Тестовый водитель',
+  lastName: '',
+  fullName: 'Тестовый водитель',
+  username: 'test_driver',
+  photoUrl: null,
+  isTelegramEnv: false,
+  isFallbackDemo: true,
+};
 
 export function applyTelegramThemeColors(theme: 'light' | 'dark'): void {
   const color = theme === 'dark' ? '#0B0E14' : '#F8FAFC';
@@ -24,7 +45,11 @@ export function applyTelegramThemeColors(theme: 'light' | 'dark'): void {
 
 export function getTelegramStartParam(): string | null {
   try {
-    const param = WebApp.initDataUnsafe?.start_param;
+    const winTg =
+      typeof window !== 'undefined'
+        ? (window as unknown as WindowWithTelegram).Telegram?.WebApp?.initDataUnsafe?.start_param
+        : undefined;
+    const param = winTg || WebApp.initDataUnsafe?.start_param;
     return typeof param === 'string' && param.trim() ? param.trim() : null;
   } catch {
     return null;
@@ -34,55 +59,92 @@ export function getTelegramStartParam(): string | null {
 export function initTelegramWebApp(): TelegramUserProfile {
   let isTelegramEnv = false;
 
+  const winTgWebApp =
+    typeof window !== 'undefined'
+      ? (window as unknown as WindowWithTelegram).Telegram?.WebApp
+      : undefined;
+
+  let rawUser: RawTelegramUser | undefined =
+    winTgWebApp?.initDataUnsafe?.user ?? WebApp.initDataUnsafe?.user;
+
+  if (
+    (WebApp.initData && WebApp.initData.length > 0) ||
+    (winTgWebApp?.initData && winTgWebApp.initData.length > 0)
+  ) {
+    isTelegramEnv = true;
+  }
+
+  // Fallback parse from URL hash (#tgWebAppData=...) if script initialization hasn't populated initDataUnsafe yet
+  if (!rawUser && typeof window !== 'undefined') {
+    try {
+      const hash = window.location.hash.replace(/^#/, '');
+      const hashParams = new URLSearchParams(hash);
+      const tgData = hashParams.get('tgWebAppData');
+      if (tgData) {
+        isTelegramEnv = true;
+        const innerParams = new URLSearchParams(tgData);
+        const userJson = innerParams.get('user');
+        if (userJson) {
+          rawUser = JSON.parse(userJson) as RawTelegramUser;
+        }
+      }
+    } catch {
+      // Ignore malformed hash payloads
+    }
+  }
+
   try {
-    const rawUser = WebApp.initDataUnsafe?.user;
-    if (WebApp.initData && WebApp.initData.length > 0) {
-      isTelegramEnv = true;
-    } else if (typeof window !== 'undefined' && (window as unknown as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData) {
-      isTelegramEnv = true;
-    }
-
     WebApp.ready();
-    WebApp.expand();
-    applyTelegramThemeColors('dark');
-
-    if (rawUser) {
-      const firstName = rawUser.first_name || 'Попутчик';
-      const lastName = rawUser.last_name || '';
-      const fullName = [firstName, lastName].filter(Boolean).join(' ');
-      return {
-        id: String(rawUser.id),
-        firstName,
-        lastName,
-        fullName,
-        username: rawUser.username ?? null,
-        photoUrl: rawUser.photo_url ?? null,
-        isTelegramEnv: true,
-      };
-    }
   } catch {
-    // Fallback gracefully when running in standard browser
+    // Ignore outside Telegram
+  }
+
+  try {
+    WebApp.expand();
+  } catch {
+    // Ignore outside Telegram
+  }
+
+  applyTelegramThemeColors('dark');
+
+  if (rawUser && rawUser.id !== undefined && rawUser.id !== null) {
+    const numericId = Number(rawUser.id);
+    const telegramId =
+      Number.isFinite(numericId) && numericId > 0 ? Math.trunc(numericId) : 999999;
+    const firstName = rawUser.first_name?.trim() || 'Попутчик';
+    const lastName = rawUser.last_name?.trim() || '';
+    const fullName = [firstName, lastName].filter(Boolean).join(' ');
+    return {
+      id: String(telegramId),
+      telegramId,
+      firstName,
+      lastName,
+      fullName,
+      username: rawUser.username?.trim() || null,
+      photoUrl: rawUser.photo_url ?? null,
+      isTelegramEnv: true,
+      isFallbackDemo: false,
+    };
   }
 
   return {
-    id: getOrCreateGuestId(),
-    firstName: 'Харьковчанин',
-    lastName: '',
-    fullName: 'Харьковчанин',
-    username: null,
-    photoUrl: null,
+    ...FALLBACK_PREVIEW_USER,
     isTelegramEnv,
   };
 }
 
 export function openTelegramUser(link: string): boolean {
   try {
-    if (WebApp.initData && WebApp.initData.length > 0) {
+    if (
+      link.startsWith('https://t.me/') &&
+      WebApp.initData &&
+      WebApp.initData.length > 0
+    ) {
       WebApp.openTelegramLink(link);
       return true;
     }
   } catch {
-    // Fallback to standard anchor navigation when outside Telegram
+    // Fallback to standard anchor navigation when outside Telegram or using tg://
   }
   return false;
 }

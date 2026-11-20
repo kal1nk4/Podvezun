@@ -34,6 +34,7 @@ interface CreateRideModalProps {
   isOpen: boolean;
   isPickingOnMap: boolean;
   draft: CreateRideDraft;
+  savedCarInfo?: string;
   onChangeDraft: (updater: (prev: CreateRideDraft) => CreateRideDraft) => void;
   onStartMapPick: (target: Exclude<MapPickerTarget, null>) => void;
   onClose: () => void;
@@ -44,6 +45,7 @@ export function CreateRideModal({
   isOpen,
   isPickingOnMap,
   draft,
+  savedCarInfo = '',
   onChangeDraft,
   onStartMapPick,
   onClose,
@@ -213,7 +215,11 @@ export function CreateRideModal({
                 type="button"
                 onClick={() => {
                   triggerHaptic('light');
-                  onChangeDraft((prev) => ({ ...prev, role: 'driver' }));
+                  onChangeDraft((prev) => ({
+                    ...prev,
+                    role: 'driver',
+                    comment: !prev.comment.trim() && savedCarInfo ? savedCarInfo : prev.comment,
+                  }));
                 }}
                 aria-pressed={draft.role === 'driver'}
                 className={`min-h-[48px] px-3 py-2.5 rounded-xl border text-left flex items-center gap-2.5 transition-colors cursor-pointer ${
@@ -233,7 +239,14 @@ export function CreateRideModal({
                 type="button"
                 onClick={() => {
                   triggerHaptic('light');
-                  onChangeDraft((prev) => ({ ...prev, role: 'passenger' }));
+                  onChangeDraft((prev) => ({
+                    ...prev,
+                    role: 'passenger',
+                    comment:
+                      savedCarInfo && prev.comment.trim() === savedCarInfo.trim()
+                        ? ''
+                        : prev.comment,
+                  }));
                 }}
                 aria-pressed={draft.role === 'passenger'}
                 className={`min-h-[48px] px-3 py-2.5 rounded-xl border text-left flex items-center gap-2.5 transition-colors cursor-pointer ${
@@ -525,9 +538,16 @@ export function CreateRideModal({
 
           {/* Comment */}
           <div>
-            <label htmlFor="ride-comment-input" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Короткий комментарий
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label htmlFor="ride-comment-input" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Короткий комментарий
+              </label>
+              {draft.role === 'driver' && savedCarInfo && (
+                <span className="text-[11px] text-[var(--accent-text)] font-medium truncate">
+                  Авто из профиля
+                </span>
+              )}
+            </div>
             <textarea
               id="ride-comment-input"
               rows={2}

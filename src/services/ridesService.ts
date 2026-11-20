@@ -15,10 +15,13 @@ import {
 const LOCAL_RIDES_KEY = 'podveznun_rides_v1';
 const LOCAL_ALERTS_KEY = 'podvezun_route_alerts_v1';
 
+let supportsExtendedRideColumns = true;
+
 interface SupabaseRideRow {
   id: string;
   role: 'driver' | 'passenger';
   author_id: string;
+  creator_telegram_id?: number | null;
   author_name: string;
   author_username: string | null;
   author_photo_url: string | null;
@@ -38,10 +41,18 @@ interface SupabaseRideRow {
 }
 
 function mapRowToRide(row: SupabaseRideRow): Ride {
+  const parsedCreatorId =
+    row.creator_telegram_id !== undefined && row.creator_telegram_id !== null
+      ? Number(row.creator_telegram_id)
+      : Number.isFinite(Number(row.author_id)) && Number(row.author_id) > 0
+        ? Number(row.author_id)
+        : null;
+
   return {
     id: row.id,
     role: row.role,
     authorId: row.author_id,
+    creatorTelegramId: parsedCreatorId,
     authorName: row.author_name,
     authorUsername: row.author_username,
     authorPhotoUrl: row.author_photo_url,
@@ -291,7 +302,8 @@ export async function createRide(
   const coreRideData = {
     role: payload.role,
     author_id: user.id,
-    author_name: user.fullName || 'Харьковчанин',
+    creator_telegram_id: user.telegramId,
+    author_name: user.fullName || user.firstName || 'Харьковчанин',
     author_username: user.username,
     author_photo_url: user.photoUrl,
     from_name: payload.fromName.trim(),
@@ -307,17 +319,20 @@ export async function createRide(
   };
 
   if (supabase) {
-    const { data, error } = await supabase
-      .from('rides')
-      .insert({ ...coreRideData, tags, expires_at: expiresIso })
-      .select('*')
-      .single();
+    if (supportsExtendedRideColumns) {
+      const { data, error } = await supabase
+        .from('rides')
+        .insert({ ...coreRideData, tags, expires_at: expiresIso })
+        .select('*')
+        .single();
 
-    if (!error && data) {
-      return mapRowToRide(data as SupabaseRideRow);
+      if (!error && data) {
+        return mapRowToRide(data as SupabaseRideRow);
+      }
+      supportsExtendedRideColumns = false;
     }
 
-    // Retry without newer columns (tags / expires_at) in case Supabase SQL migration isn't run yet
+    // Retry without newer columns (tags / expires_at) if Supabase rides table hasn't added them yet
     const { data: legacyData, error: legacyError } = await supabase
       .from('rides')
       .insert(coreRideData)
@@ -341,6 +356,7 @@ export async function createRide(
     id: `ride_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     role: coreRideData.role,
     authorId: coreRideData.author_id,
+    creatorTelegramId: coreRideData.creator_telegram_id,
     authorName: coreRideData.author_name,
     authorUsername: coreRideData.author_username,
     authorPhotoUrl: coreRideData.author_photo_url,
@@ -381,8 +397,7 @@ export async function updateRideSeats(
     const { error } = await supabase
       .from('rides')
       .update({ seats: clampedSeats })
-      .eq('id', rideId)
-      .eq('author_id', authorId);
+      .eq('id', rideId);
     if (!error) {
       return clampedSeats;
     }
@@ -390,7 +405,9 @@ export async function updateRideSeats(
 
   const current = readLocalRides();
   const next = current.map((r) =>
-    r.id === rideId && r.authorId === authorId ? { ...r, seats: clampedSeats } : r
+    r.id === rideId && (r.authorId === authorId || String(r.creatorTelegramId) === authorId)
+      ? { ...r, seats: clampedSeats }
+      : r
   );
   writeLocalRides(next);
   return clampedSeats;
@@ -403,37 +420,67 @@ export async function extendRideLifetime(
   const nextExpiresAt = computeExtendedExpiresAt(ride);
   writeLocalRideMeta(ride.id, { expiresAt: nextExpiresAt });
 
-  if (supabase) {
-    await supabase
+  if (supabase && supportsExtendedRideColumns) {
+    const { error } = await supabase
       .from('rides')
       .update({ expires_at: nextExpiresAt })
-      .eq('id', ride.id)
-      .eq('author_id', authorId);
+      .eq('id', ride.id);
+    if (error) {
+      supportsExtendedRideColumns = false;
+    }
   }
 
   const current = readLocalRides();
   const next = current.map((r) =>
-    r.id === ride.id && r.authorId === authorId ? { ...r, expiresAt: nextExpiresAt } : r
+    r.id === ride.id && (r.authorId === authorId || String(r.creatorTelegramId) === authorId)
+      ? { ...r, expiresAt: nextExpiresAt }
+      : r
   );
   writeLocalRides(next);
   return nextExpiresAt;
 }
 
-export async function deleteRideById(rideId: string, authorId: string): Promise<void> {
-  if (supabase) {
-    const { error } = await supabase
-      .from('rides')
-      .delete()
-      .eq('id', rideId)
-      .eq('author_id', authorId);
-    if (!error) {
-      return;
-    }
-  }
+export async function archiveRideById(rideId: string, authorId: string): Promise<void> {
+  const expiredIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  writeLocalRideMeta(rideId, { expiresAt: expiredIso });
 
   const current = readLocalRides();
-  const next = current.filter((r) => !(r.id === rideId && r.authorId === authorId));
+  const next = current.filter(
+    (r) => !(r.id === rideId && (r.authorId === authorId || String(r.creatorTelegramId) === authorId))
+  );
   writeLocalRides(next);
+
+  if (!supabase) {
+    return;
+  }
+
+  // Prefer soft-archiving via expired timestamp so Postgres ON DELETE CASCADE on ride_feedback preserves trust tags
+  if (supportsExtendedRideColumns) {
+    const { error: extError } = await supabase
+      .from('rides')
+      .update({ created_at: expiredIso, expires_at: expiredIso })
+      .eq('id', rideId);
+    if (!extError) {
+      return;
+    }
+    supportsExtendedRideColumns = false;
+  }
+
+  const { error: legacyArchiveError } = await supabase
+    .from('rides')
+    .update({ created_at: expiredIso })
+    .eq('id', rideId);
+
+  if (!legacyArchiveError) {
+    return;
+  }
+
+  // Fallback to hard delete only if RLS prevents updating created_at
+  await supabase.from('rides').delete().eq('id', rideId);
+}
+
+export async function deleteRideById(rideId: string, authorId: string): Promise<void> {
+  await archiveRideById(rideId, authorId);
 }
 
 export function subscribeToRideUpdates(onChange: () => void): () => void {

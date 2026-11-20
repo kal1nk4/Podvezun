@@ -1,11 +1,16 @@
 import type {
   CreateRidePayload,
+  FeedbackTagId,
   KharkivLandmark,
   LatLng,
+  ProfileRole,
   Ride,
+  RideFeedback,
   RideFilter,
   RideTagId,
   RouteWatchAlert,
+  TagCount,
+  TelegramUserProfile,
 } from '../types/ride';
 
 export const KHARKIV_CENTER: LatLng = {
@@ -57,6 +62,15 @@ export const RIDE_TAGS: RideTagOption[] = [
   { id: 'card', label: 'На карту' },
   { id: 'courtyard', label: 'Заеду во двор' },
 ];
+
+export const FEEDBACK_TAGS: FeedbackTagId[] = [
+  'Вовремя',
+  'По пути',
+  'Всё ок',
+  'Приятный попутчик',
+];
+
+export const PROFILE_BIO_MAX_LENGTH = 120;
 
 export const DEPARTURE_PRESETS = [
   'Сейчас',
@@ -272,13 +286,20 @@ export function formatRemainingTime(
   return mins === 0 ? `ещё ${hours} ч` : `ещё ${hours} ч ${mins} мин`;
 }
 
-export function buildTelegramLink(username?: string | null): string | null {
-  if (!username) return null;
-  const cleaned = username.trim().replace(/^@+/, '');
-  if (!/^[a-zA-Z0-9_]{3,64}$/.test(cleaned)) {
-    return null;
+export function buildTelegramLink(
+  username?: string | null,
+  telegramId?: number | null
+): string | null {
+  if (username) {
+    const cleaned = username.trim().replace(/^@+/, '');
+    if (/^[a-zA-Z0-9_]{3,64}$/.test(cleaned)) {
+      return `https://t.me/${cleaned}`;
+    }
   }
-  return `https://t.me/${cleaned}`;
+  if (typeof telegramId === 'number' && Number.isFinite(telegramId) && telegramId > 0) {
+    return `tg://user?id=${Math.trunc(telegramId)}`;
+  }
+  return null;
 }
 
 export function buildShareRideLink(
@@ -415,3 +436,57 @@ export function validateRideInput(input: CreateRidePayload): RideValidationResul
     errors,
   };
 }
+
+export function isRideCreatedByUser(
+  ride: Pick<Ride, 'authorId' | 'creatorTelegramId'>,
+  user: Pick<TelegramUserProfile, 'id' | 'telegramId'>
+): boolean {
+  if (
+    typeof ride.creatorTelegramId === 'number' &&
+    ride.creatorTelegramId === user.telegramId
+  ) {
+    return true;
+  }
+  return ride.authorId === user.id || ride.authorId === String(user.telegramId);
+}
+
+export function aggregateFeedbackTags(
+  feedbackList: Pick<RideFeedback, 'tag'>[]
+): TagCount[] {
+  const counts = new Map<FeedbackTagId, number>();
+  for (const item of feedbackList) {
+    if (!FEEDBACK_TAGS.includes(item.tag)) continue;
+    counts.set(item.tag, (counts.get(item.tag) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return FEEDBACK_TAGS.indexOf(a.tag) - FEEDBACK_TAGS.indexOf(b.tag);
+    });
+}
+
+export function getTopFeedbackTags(
+  feedbackList: Pick<RideFeedback, 'tag'>[],
+  limit: number = 2
+): TagCount[] {
+  return aggregateFeedbackTags(feedbackList).slice(0, Math.max(0, limit));
+}
+
+export function validateProfileInput(input: {
+  role: ProfileRole;
+  carInfo: string;
+  bio: string;
+}): { valid: boolean; error?: string } {
+  if (!['driver', 'passenger', 'both'].includes(input.role)) {
+    return { valid: false, error: 'Выберите основную роль' };
+  }
+  if (input.carInfo.trim().length > 80) {
+    return { valid: false, error: 'Информация об авто не длиннее 80 символов' };
+  }
+  if (input.bio.trim().length > PROFILE_BIO_MAX_LENGTH) {
+    return { valid: false, error: `Заметка о себе не длиннее ${PROFILE_BIO_MAX_LENGTH} символов` };
+  }
+  return { valid: true };
+}
+

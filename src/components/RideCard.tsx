@@ -11,7 +11,7 @@ import {
   Share2,
   Trash2,
 } from 'lucide-react';
-import type { LatLng, Ride } from '../types/ride';
+import type { LatLng, Ride, UserProfile } from '../types/ride';
 import {
   buildTelegramLink,
   formatDistanceFromUser,
@@ -28,6 +28,7 @@ interface RideCardProps {
   ride: Ride;
   isSelected: boolean;
   isMine: boolean;
+  authorProfile?: UserProfile;
   userLocation?: LatLng | null;
   lowDataMode?: boolean;
   onSelect: (ride: Ride) => void;
@@ -41,6 +42,7 @@ export function RideCard({
   ride,
   isSelected,
   isMine,
+  authorProfile,
   userLocation,
   lowDataMode = false,
   onSelect,
@@ -51,7 +53,10 @@ export function RideCard({
 }: RideCardProps) {
   const [copied, setCopied] = useState(false);
   const isDriver = ride.role === 'driver';
-  const telegramHref = buildTelegramLink(ride.authorUsername);
+  const telegramHref = buildTelegramLink(
+    ride.authorUsername ?? authorProfile?.username,
+    ride.creatorTelegramId
+  );
   const distanceLabel = userLocation
     ? formatDistanceFromUser(
         haversineDistanceKm(userLocation, { lat: ride.fromLat, lng: ride.fromLng })
@@ -145,8 +150,18 @@ export function RideCard({
             ·
           </span>
           <span className="font-sans text-slate-700 dark:text-slate-300 font-medium">
-            {ride.authorName}
+            {authorProfile?.firstName || ride.authorName}
           </span>
+          {authorProfile && authorProfile.completedRides > 0 && (
+            <>
+              <span className="text-slate-300 dark:text-slate-600" aria-hidden="true">
+                ·
+              </span>
+              <span className="font-sans text-[11px] text-slate-500 dark:text-slate-400">
+                Поездок: {authorProfile.completedRides}
+              </span>
+            </>
+          )}
         </div>
 
         {tags.length > 0 && (

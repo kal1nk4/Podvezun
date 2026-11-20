@@ -1,10 +1,14 @@
 export type RideRole = 'driver' | 'passenger';
 
+export type ProfileRole = 'driver' | 'passenger' | 'both';
+
 export type RideFilter = 'all' | 'driver' | 'passenger';
 
 export type RideTagId = 'pets' | 'luggage' | 'card' | 'courtyard';
 
-export type AppView = 'feed' | 'mine';
+export type FeedbackTagId = 'Вовремя' | 'По пути' | 'Всё ок' | 'Приятный попутчик';
+
+export type AppView = 'feed' | 'mine' | 'profile';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -28,6 +32,7 @@ export interface Ride {
   id: string;
   role: RideRole;
   authorId: string;
+  creatorTelegramId?: number | null;
   authorName: string;
   authorUsername: string | null;
   authorPhotoUrl: string | null;
@@ -71,10 +76,37 @@ export interface RouteWatchAlert {
 
 export interface TelegramUserProfile {
   id: string;
+  telegramId: number;
   firstName: string;
   lastName: string;
   fullName: string;
   username: string | null;
   photoUrl: string | null;
   isTelegramEnv: boolean;
+  isFallbackDemo: boolean;
+}
+
+export interface UserProfile {
+  telegramId: number;
+  firstName: string;
+  username: string | null;
+  role: ProfileRole;
+  carInfo: string;
+  bio: string;
+  completedRides: number;
+  updatedAt?: string;
+}
+
+export interface RideFeedback {
+  id: string;
+  rideId: string;
+  fromTelegramId: number;
+  toTelegramId: number;
+  tag: FeedbackTagId;
+  createdAt: string;
+}
+
+export interface TagCount {
+  tag: FeedbackTagId;
+  count: number;
 }
