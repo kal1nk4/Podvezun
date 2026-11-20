@@ -1,4 +1,5 @@
 import type {
+  CompletedRideRecord,
   CreateRidePayload,
   FeedbackTagId,
   KharkivLandmark,
@@ -488,5 +489,153 @@ export function validateProfileInput(input: {
     return { valid: false, error: `Заметка о себе не длиннее ${PROFILE_BIO_MAX_LENGTH} символов` };
   }
   return { valid: true };
+}
+
+const RUSSIAN_MONTHS_SHORT = [
+  'янв.',
+  'фев.',
+  'мар.',
+  'апр.',
+  'мая',
+  'июн.',
+  'июл.',
+  'авг.',
+  'сен.',
+  'окт.',
+  'нояб.',
+  'дек.',
+];
+
+export function formatHistoryDateTime(
+  iso: string,
+  nowMs: number = Date.now()
+): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return 'Недавно';
+
+  const date = new Date(ts);
+  const now = new Date(nowMs);
+
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  const timeStr = `${hh}:${mm}`;
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfTarget = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((startOfToday - startOfTarget) / (24 * 60 * 60 * 1000));
+
+  if (dayDiff === 0) return `Сегодня, ${timeStr}`;
+  if (dayDiff === 1) return `Вчера, ${timeStr}`;
+
+  const month = RUSSIAN_MONTHS_SHORT[date.getMonth()] ?? '';
+  return `${date.getDate()} ${month}, ${timeStr}`;
+}
+
+export interface MergeCompletedHistoryParams {
+  user: Pick<TelegramUserProfile, 'id' | 'telegramId'>;
+  remoteRides: Ride[];
+  localEntries: CompletedRideRecord[];
+  authoredFeedback: RideFeedback[];
+  receivedFeedback: RideFeedback[];
+  participatedRideIds?: string[];
+  nowMs?: number;
+}
+
+export function mergeCompletedRideHistory(
+  params: MergeCompletedHistoryParams
+): CompletedRideRecord[] {
+  const {
+    user,
+    remoteRides,
+    localEntries,
+    authoredFeedback,
+    receivedFeedback,
+    participatedRideIds = [],
+    nowMs = Date.now(),
+  } = params;
+
+  const authoredByRideId = new Map<string, RideFeedback>();
+  for (const fb of authoredFeedback) {
+    if (fb.fromTelegramId === user.telegramId && !authoredByRideId.has(fb.rideId)) {
+      authoredByRideId.set(fb.rideId, fb);
+    }
+  }
+
+  const receivedByRideId = new Map<string, FeedbackTagId[]>();
+  for (const fb of receivedFeedback) {
+    if (fb.toTelegramId === user.telegramId) {
+      const list = receivedByRideId.get(fb.rideId) ?? [];
+      list.push(fb.tag);
+      receivedByRideId.set(fb.rideId, list);
+    }
+  }
+
+  const participatedSet = new Set<string>(participatedRideIds);
+  for (const fb of authoredFeedback) {
+    if (fb.fromTelegramId === user.telegramId) {
+      participatedSet.add(fb.rideId);
+    }
+  }
+
+  const byId = new Map<string, import('../types/ride').CompletedRideRecord>();
+
+  // Seed with local snapshots first (preserves real completedAt & originalCreatedAt)
+  for (const entry of localEntries) {
+    if (!entry?.ride?.id) continue;
+    const isCreator = isRideCreatedByUser(entry.ride, user);
+    const myFb = authoredByRideId.get(entry.ride.id)?.tag ?? entry.myFeedbackTag ?? null;
+    const recFb = receivedByRideId.get(entry.ride.id) ?? entry.receivedFeedbackTags ?? [];
+    byId.set(entry.ride.id, {
+      ...entry,
+      id: entry.ride.id,
+      participation: isCreator ? 'created' : 'participated',
+      myFeedbackTag: myFb,
+      receivedFeedbackTags: recFb,
+    });
+  }
+
+  // Merge remote rides that are completed/expired (or explicitly participated + archived)
+  for (const ride of remoteRides) {
+    const isCreator = isRideCreatedByUser(ride, user);
+    const isParticipated = !isCreator && participatedSet.has(ride.id);
+    if (!isCreator && !isParticipated) continue;
+
+    const expired = isRideExpired(ride.createdAt, nowMs, ride.expiresAt);
+    const existing = byId.get(ride.id);
+
+    // Created rides must be expired/archived to show in completed history (active ones live in "Мои")
+    // Participated rides appear once expired/archived OR if explicitly recorded in localEntries
+    if (!expired && !existing) {
+      continue;
+    }
+
+    const myFb = authoredByRideId.get(ride.id)?.tag ?? existing?.myFeedbackTag ?? null;
+    const recFb = receivedByRideId.get(ride.id) ?? existing?.receivedFeedbackTags ?? [];
+
+    const fallbackCompletedAt =
+      existing?.completedAt ??
+      authoredByRideId.get(ride.id)?.createdAt ??
+      ride.expiresAt ??
+      ride.createdAt;
+
+    byId.set(ride.id, {
+      id: ride.id,
+      ride: {
+        ...ride,
+        tags: ride.tags && ride.tags.length > 0 ? ride.tags : (existing?.ride.tags ?? []),
+      },
+      participation: isCreator ? 'created' : 'participated',
+      completedAt: fallbackCompletedAt,
+      originalCreatedAt: existing?.originalCreatedAt,
+      myFeedbackTag: myFb,
+      receivedFeedbackTags: recFb,
+    });
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const tA = Date.parse(a.completedAt) || Date.parse(a.ride.createdAt) || 0;
+    const tB = Date.parse(b.completedAt) || Date.parse(b.ride.createdAt) || 0;
+    return tB - tA;
+  });
 }
 

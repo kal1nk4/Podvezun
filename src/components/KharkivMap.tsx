@@ -68,6 +68,8 @@ interface KharkivMapProps {
   feedbackByRecipient: Record<number, RideFeedback[]>;
   onCompleteRide: (ride: Ride) => Promise<void>;
   onSubmitFeedback: (ride: Ride, tag: FeedbackTagId) => Promise<void>;
+  participatedRideIds?: string[];
+  onMarkParticipated?: (ride: Ride) => void;
 }
 
 function escapeHtml(text: string): string {
@@ -131,6 +133,8 @@ export function KharkivMap({
   feedbackByRecipient,
   onCompleteRide,
   onSubmitFeedback,
+  participatedRideIds = [],
+  onMarkParticipated,
 }: KharkivMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -768,42 +772,66 @@ export function KharkivMap({
             </p>
           )}
 
-          {/* Quick feedback tags for other users (not author) */}
-          {!isSelectedRideMine && selectedAuthorTelegramId !== null && (
+          {/* Quick feedback tags & trip participation for other users (not author) */}
+          {!isSelectedRideMine && (
             <div
-              className="mt-2 pt-2 border-t border-slate-200/70 dark:border-slate-800/80"
+              className="mt-2 pt-2 border-t border-slate-200/70 dark:border-slate-800/80 space-y-2"
               data-testid="ride-feedback-block"
             >
-              {existingUserFeedback ? (
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--accent-text)]">
-                  <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                  <span>Ваша отметка: {existingUserFeedback.tag}</span>
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  <span className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                    Отметить попутчика:
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {FEEDBACK_TAGS.map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        disabled={submittingTag !== null}
-                        onClick={() => {
-                          triggerHaptic('medium');
-                          setSubmittingTag(tag);
-                          void onSubmitFeedback(selectedRide, tag).finally(() => {
-                            setSubmittingTag(null);
-                          });
-                        }}
-                        className="min-h-[30px] px-2.5 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-[11px] font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 transition-colors cursor-pointer disabled:opacity-50"
-                      >
-                        {submittingTag === tag ? '...' : tag}
-                      </button>
-                    ))}
+              {selectedAuthorTelegramId !== null && (
+                existingUserFeedback ? (
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--accent-text)]">
+                    <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>Ваша отметка: {existingUserFeedback.tag}</span>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <span className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      Отметить попутчика:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {FEEDBACK_TAGS.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          disabled={submittingTag !== null}
+                          onClick={() => {
+                            triggerHaptic('medium');
+                            setSubmittingTag(tag);
+                            void onSubmitFeedback(selectedRide, tag).finally(() => {
+                              setSubmittingTag(null);
+                            });
+                          }}
+                          className="min-h-[30px] px-2.5 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-[11px] font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          {submittingTag === tag ? '...' : tag}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              )}
+
+              {onMarkParticipated && (
+                participatedRideIds.includes(selectedRide.id) || existingUserFeedback ? (
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+                    <span>Поездка добавлена в историю «Мои поездки»</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('medium');
+                      onMarkParticipated(selectedRide);
+                    }}
+                    data-testid="mark-ride-participated-btn"
+                    className="min-h-[32px] px-2.5 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-[11px] font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+                    <span>Я участвовал(а) в поездке</span>
+                  </button>
+                )
               )}
             </div>
           )}

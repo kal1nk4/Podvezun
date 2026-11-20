@@ -110,3 +110,17 @@ export interface TagCount {
   tag: FeedbackTagId;
   count: number;
 }
+
+export type ProfileTab = 'settings' | 'trips';
+
+export type CompletedRideParticipation = 'created' | 'participated';
+
+export interface CompletedRideRecord {
+  id: string;
+  ride: Ride;
+  participation: CompletedRideParticipation;
+  completedAt: string;
+  originalCreatedAt?: string;
+  myFeedbackTag?: FeedbackTagId | null;
+  receivedFeedbackTags?: FeedbackTagId[];
+}

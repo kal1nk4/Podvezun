@@ -1,7 +1,9 @@
 import { supabase } from '../lib/supabaseClient';
 import type {
+  CompletedRideRecord,
   CreateRidePayload,
   Ride,
+  RideFeedback,
   RideTagId,
   RouteWatchAlert,
   TelegramUserProfile,
@@ -9,11 +11,14 @@ import type {
 import {
   computeExtendedExpiresAt,
   filterActiveRides,
+  mergeCompletedRideHistory,
   RIDE_TTL_MS,
 } from '../utils/ridesLogic';
 
 const LOCAL_RIDES_KEY = 'podveznun_rides_v1';
 const LOCAL_ALERTS_KEY = 'podvezun_route_alerts_v1';
+const LOCAL_COMPLETED_HISTORY_KEY = 'podvezun_completed_history_v1';
+const LOCAL_PARTICIPATED_IDS_KEY = 'podvezun_participated_rides_v1';
 
 let supportsExtendedRideColumns = true;
 
@@ -259,6 +264,79 @@ function writeLocalRideMeta(rideId: string, patch: LocalRideMeta): void {
   }
 }
 
+export function readLocalCompletedHistory(telegramId: number): CompletedRideRecord[] {
+  if (typeof window === 'undefined' || !telegramId) return [];
+  try {
+    const raw = window.localStorage.getItem(`${LOCAL_COMPLETED_HISTORY_KEY}_${telegramId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as CompletedRideRecord[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function recordLocalCompletedRide(
+  telegramId: number,
+  entry: CompletedRideRecord
+): void {
+  if (typeof window === 'undefined' || !telegramId || !entry?.ride?.id) return;
+  try {
+    const current = readLocalCompletedHistory(telegramId);
+    const filtered = current.filter((item) => item.id !== entry.id);
+    const next = [entry, ...filtered].slice(0, 60);
+    window.localStorage.setItem(
+      `${LOCAL_COMPLETED_HISTORY_KEY}_${telegramId}`,
+      JSON.stringify(next)
+    );
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export function readParticipatedRideIds(telegramId: number): string[] {
+  if (typeof window === 'undefined' || !telegramId) return [];
+  try {
+    const raw = window.localStorage.getItem(`${LOCAL_PARTICIPATED_IDS_KEY}_${telegramId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as string[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function markRideParticipatedLocally(
+  telegramId: number,
+  ride: Ride,
+  saveAsCompleted: boolean = false
+): string[] {
+  if (typeof window === 'undefined' || !telegramId || !ride?.id) return [];
+  try {
+    if (saveAsCompleted) {
+      recordLocalCompletedRide(telegramId, {
+        id: ride.id,
+        ride,
+        participation: 'participated',
+        completedAt: new Date().toISOString(),
+        originalCreatedAt: ride.createdAt,
+      });
+    }
+    const current = readParticipatedRideIds(telegramId);
+    if (!current.includes(ride.id)) {
+      const next = [ride.id, ...current].slice(0, 100);
+      window.localStorage.setItem(
+        `${LOCAL_PARTICIPATED_IDS_KEY}_${telegramId}`,
+        JSON.stringify(next)
+      );
+      return next;
+    }
+    return current;
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchActiveRides(): Promise<{ rides: Ride[]; source: 'supabase' | 'local' }> {
   if (supabase) {
     const threeHoursAgo = new Date(Date.now() - RIDE_TTL_MS * 2).toISOString();
@@ -440,11 +518,31 @@ export async function extendRideLifetime(
   return nextExpiresAt;
 }
 
-export async function archiveRideById(rideId: string, authorId: string): Promise<void> {
+export async function archiveRideById(
+  rideId: string,
+  authorId: string,
+  rideSnapshot?: Ride,
+  telegramId?: number
+): Promise<void> {
+  const nowIso = new Date().toISOString();
   const expiredIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   writeLocalRideMeta(rideId, { expiresAt: expiredIso });
 
   const current = readLocalRides();
+  const matchedLocal = rideSnapshot ?? current.find((r) => r.id === rideId);
+  const ownerTelegramId =
+    telegramId ?? matchedLocal?.creatorTelegramId ?? (Number(authorId) > 0 ? Number(authorId) : 0);
+
+  if (matchedLocal && ownerTelegramId > 0) {
+    recordLocalCompletedRide(ownerTelegramId, {
+      id: matchedLocal.id,
+      ride: matchedLocal,
+      participation: 'created',
+      completedAt: nowIso,
+      originalCreatedAt: matchedLocal.createdAt,
+    });
+  }
+
   const next = current.filter(
     (r) => !(r.id === rideId && (r.authorId === authorId || String(r.creatorTelegramId) === authorId))
   );
@@ -479,8 +577,90 @@ export async function archiveRideById(rideId: string, authorId: string): Promise
   await supabase.from('rides').delete().eq('id', rideId);
 }
 
-export async function deleteRideById(rideId: string, authorId: string): Promise<void> {
-  await archiveRideById(rideId, authorId);
+export async function deleteRideById(
+  rideId: string,
+  authorId: string,
+  rideSnapshot?: Ride,
+  telegramId?: number
+): Promise<void> {
+  await archiveRideById(rideId, authorId, rideSnapshot, telegramId);
+}
+
+export async function fetchCompletedRidesForUser(
+  user: TelegramUserProfile,
+  authoredFeedback: RideFeedback[],
+  receivedFeedback: RideFeedback[]
+): Promise<CompletedRideRecord[]> {
+  const localEntries = readLocalCompletedHistory(user.telegramId);
+  const participatedIds = Array.from(
+    new Set([
+      ...readParticipatedRideIds(user.telegramId),
+      ...authoredFeedback
+        .filter((f) => f.fromTelegramId === user.telegramId)
+        .map((f) => f.rideId),
+    ])
+  );
+
+  let remoteRides: Ride[] = [];
+  if (supabase) {
+    const metaMap = readLocalRideMeta();
+    const mapWithMeta = (row: SupabaseRideRow): Ride => {
+      const ride = mapRowToRide(row);
+      const meta = metaMap[ride.id];
+      if (!meta) return ride;
+      return {
+        ...ride,
+        tags: ride.tags && ride.tags.length > 0 ? ride.tags : (meta.tags ?? []),
+        expiresAt: ride.expiresAt ?? meta.expiresAt,
+      };
+    };
+
+    const createdPromise = supabase
+      .from('rides')
+      .select('*')
+      .or(`creator_telegram_id.eq.${user.telegramId},author_id.eq.${user.id}`)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    const participatedPromise =
+      participatedIds.length > 0
+        ? supabase
+            .from('rides')
+            .select('*')
+            .in('id', participatedIds)
+            .order('created_at', { ascending: false })
+            .limit(50)
+        : Promise.resolve({ data: [] as SupabaseRideRow[], error: null });
+
+    const [createdRes, participatedRes] = await Promise.all([
+      createdPromise,
+      participatedPromise,
+    ]);
+
+    const mergedMap = new Map<string, Ride>();
+    if (!createdRes.error && Array.isArray(createdRes.data)) {
+      for (const row of createdRes.data as SupabaseRideRow[]) {
+        const mapped = mapWithMeta(row);
+        mergedMap.set(mapped.id, mapped);
+      }
+    }
+    if (!participatedRes.error && Array.isArray(participatedRes.data)) {
+      for (const row of participatedRes.data as SupabaseRideRow[]) {
+        const mapped = mapWithMeta(row);
+        mergedMap.set(mapped.id, mapped);
+      }
+    }
+    remoteRides = Array.from(mergedMap.values());
+  }
+
+  return mergeCompletedRideHistory({
+    user,
+    remoteRides,
+    localEntries,
+    authoredFeedback,
+    receivedFeedback,
+    participatedRideIds: participatedIds,
+  });
 }
 
 export function subscribeToRideUpdates(onChange: () => void): () => void {

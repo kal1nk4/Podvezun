@@ -12,6 +12,7 @@ import {
   filterActiveRides,
   findMatchingWatchedRides,
   formatDistanceFromUser,
+  formatHistoryDateTime,
   formatPriceUah,
   getTopFeedbackTags,
   haversineDistanceKm,
@@ -19,13 +20,14 @@ import {
   isRideExpired,
   KHARKIV_HUBS,
   KHARKIV_LANDMARKS,
+  mergeCompletedRideHistory,
   parseSharedRideId,
   RIDE_EXTEND_STEP_MS,
   RIDE_TTL_MS,
   validateProfileInput,
   validateRideInput,
 } from './ridesLogic';
-import type { Ride, RideFeedback, RouteWatchAlert } from '../types/ride';
+import type { CompletedRideRecord, Ride, RideFeedback, RouteWatchAlert } from '../types/ride';
 
 const NOW = Date.parse('2026-11-19T18:00:00.000Z');
 
@@ -322,4 +324,93 @@ test('validateProfileInput enforces 120 char bio limit and valid roles', () => {
     false
   );
 });
+
+test('formatHistoryDateTime formats today, yesterday, and older Russian dates', () => {
+  const refNow = new Date(2026, 10, 20, 18, 0, 0).getTime();
+  const todayIso = new Date(2026, 10, 20, 14, 5, 0).toISOString();
+  const yesterdayIso = new Date(2026, 10, 19, 9, 30, 0).toISOString();
+  const olderIso = new Date(2026, 10, 10, 12, 15, 0).toISOString();
+
+  assert.equal(formatHistoryDateTime(todayIso, refNow), 'Сегодня, 14:05');
+  assert.equal(formatHistoryDateTime(yesterdayIso, refNow), 'Вчера, 09:30');
+  assert.equal(formatHistoryDateTime(olderIso, refNow), '10 нояб., 12:15');
+  assert.equal(formatHistoryDateTime('bad-date', refNow), 'Недавно');
+});
+
+test('mergeCompletedRideHistory merges created and participated rides, excludes active unconfirmed rides, and sorts newest first', () => {
+  const user = { id: '999999', telegramId: 999999 };
+  const activeOwnRide: Ride = {
+    ...sampleRides[0],
+    id: 'active-own',
+    authorId: '999999',
+    creatorTelegramId: 999999,
+    createdAt: new Date(NOW - 10 * 60 * 1000).toISOString(),
+  };
+  const archivedOwnRide: Ride = {
+    ...sampleRides[0],
+    id: 'archived-own',
+    authorId: '999999',
+    creatorTelegramId: 999999,
+    createdAt: new Date(NOW - 24 * 60 * 60 * 1000).toISOString(),
+  };
+  const participatedRide: Ride = {
+    ...sampleRides[1],
+    id: 'participated-1',
+    authorId: '777777',
+    creatorTelegramId: 777777,
+    createdAt: new Date(NOW - 5 * 60 * 60 * 1000).toISOString(),
+  };
+
+  const localEntries: CompletedRideRecord[] = [
+    {
+      id: 'archived-own',
+      ride: { ...archivedOwnRide, createdAt: new Date(NOW - 45 * 60 * 1000).toISOString() },
+      participation: 'created',
+      completedAt: new Date(NOW - 5 * 60 * 1000).toISOString(),
+      originalCreatedAt: new Date(NOW - 45 * 60 * 1000).toISOString(),
+    },
+  ];
+
+  const authoredFeedback: RideFeedback[] = [
+    {
+      id: 'fb1',
+      rideId: 'participated-1',
+      fromTelegramId: 999999,
+      toTelegramId: 777777,
+      tag: 'Вовремя',
+      createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(),
+    },
+  ];
+
+  const receivedFeedback: RideFeedback[] = [
+    {
+      id: 'fb2',
+      rideId: 'archived-own',
+      fromTelegramId: 777777,
+      toTelegramId: 999999,
+      tag: 'По пути',
+      createdAt: new Date(NOW - 15 * 60 * 1000).toISOString(),
+    },
+  ];
+
+  const merged = mergeCompletedRideHistory({
+    user,
+    remoteRides: [activeOwnRide, archivedOwnRide, participatedRide],
+    localEntries,
+    authoredFeedback,
+    receivedFeedback,
+    nowMs: NOW,
+  });
+
+  assert.deepEqual(
+    merged.map((m) => m.id),
+    ['archived-own', 'participated-1']
+  );
+  assert.equal(merged[0].participation, 'created');
+  assert.equal(merged[0].originalCreatedAt, new Date(NOW - 45 * 60 * 1000).toISOString());
+  assert.deepEqual(merged[0].receivedFeedbackTags, ['По пути']);
+  assert.equal(merged[1].participation, 'participated');
+  assert.equal(merged[1].myFeedbackTag, 'Вовремя');
+});
+
 

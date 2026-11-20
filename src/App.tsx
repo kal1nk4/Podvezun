@@ -10,6 +10,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
+import { CompletedRideDetailModal } from './components/CompletedRideDetailModal';
 import { CreateRideModal, type CreateRideDraft } from './components/CreateRideModal';
 import { KharkivMap, type MapPickerTarget } from './components/KharkivMap';
 import { ProfileView } from './components/ProfileView';
@@ -17,6 +18,7 @@ import { RideCard } from './components/RideCard';
 import { RouteRadarModal } from './components/RouteRadarModal';
 import { ThemeCustomizer } from './components/ThemeCustomizer';
 import {
+  fetchFeedbackAuthoredByUser,
   fetchFeedbackForUsers,
   fetchProfilesByTelegramIds,
   incrementCompletedRides,
@@ -25,10 +27,14 @@ import {
   upsertUserProfileOnLogin,
 } from './services/profileService';
 import {
+  archiveRideById,
   createRide,
   deleteRideById,
   extendRideLifetime,
   fetchActiveRides,
+  fetchCompletedRidesForUser,
+  markRideParticipatedLocally,
+  readParticipatedRideIds,
   readWatchedAlerts,
   subscribeToRideUpdates,
   updateRideSeats,
@@ -37,6 +43,7 @@ import {
 import type {
   AccentColorId,
   AppView,
+  CompletedRideRecord,
   CreateRidePayload,
   FeedbackTagId,
   LatLng,
@@ -166,6 +173,13 @@ export default function App() {
   const [feedbackByRecipient, setFeedbackByRecipient] = useState<
     Record<number, RideFeedback[]>
   >({});
+  const [completedHistory, setCompletedHistory] = useState<CompletedRideRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedHistoryEntry, setSelectedHistoryEntry] =
+    useState<CompletedRideRecord | null>(null);
+  const [participatedRideIds, setParticipatedRideIds] = useState<string[]>(() =>
+    readParticipatedRideIds(user.telegramId)
+  );
 
   // Route Radar watch alerts
   const [alerts, setAlerts] = useState<RouteWatchAlert[]>(readWatchedAlerts);
@@ -290,6 +304,62 @@ export default function App() {
   useEffect(() => {
     void refreshSocialTrustData(rides);
   }, [rides, refreshSocialTrustData]);
+
+  const loadCompletedHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const [authoredFb, receivedRes] = await Promise.all([
+        fetchFeedbackAuthoredByUser(user.telegramId),
+        fetchFeedbackForUsers([user.telegramId]),
+      ]);
+      const receivedForMe = receivedRes.byRecipient[user.telegramId] ?? [];
+      const history = await fetchCompletedRidesForUser(
+        user,
+        authoredFb,
+        receivedForMe
+      );
+      setCompletedHistory(history);
+      setParticipatedRideIds((prev) => {
+        const next = new Set(prev);
+        for (const fb of authoredFb) {
+          next.add(fb.rideId);
+        }
+        return Array.from(next);
+      });
+
+      const companionIds = new Set<number>();
+      for (const entry of history) {
+        const cid = entry.ride.creatorTelegramId;
+        if (typeof cid === 'number' && cid > 0 && cid !== user.telegramId) {
+          companionIds.add(cid);
+        }
+      }
+      if (companionIds.size > 0) {
+        const ids = Array.from(companionIds);
+        const [extraProfiles, extraFeedback] = await Promise.all([
+          fetchProfilesByTelegramIds(ids),
+          fetchFeedbackForUsers(ids),
+        ]);
+        setProfilesByTelegramId((prev) => ({ ...prev, ...extraProfiles }));
+        setFeedbackByRecipient((prev) => ({
+          ...prev,
+          ...extraFeedback.byRecipient,
+        }));
+      }
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    void loadCompletedHistory();
+  }, [loadCompletedHistory]);
+
+  useEffect(() => {
+    if (appView === 'profile') {
+      void loadCompletedHistory();
+    }
+  }, [appView, loadCompletedHistory]);
 
   // Select ride automatically if opened via shared link (?ride=... or start_param=ride_...)
   useEffect(() => {
@@ -462,15 +532,17 @@ export default function App() {
   };
 
   const handleDeleteRide = async (rideId: string) => {
-    await deleteRideById(rideId, user.id);
+    const rideSnapshot = rides.find((r) => r.id === rideId);
+    await deleteRideById(rideId, user.id, rideSnapshot, user.telegramId);
     setRides((prev) => prev.filter((r) => r.id !== rideId));
     if (selectedRide?.id === rideId) {
       setSelectedRide(null);
     }
+    void loadCompletedHistory();
   };
 
   const handleCompleteRide = async (ride: Ride) => {
-    await deleteRideById(ride.id, user.id);
+    await archiveRideById(ride.id, user.id, ride, user.telegramId);
     setRides((prev) => prev.filter((r) => r.id !== ride.id));
     if (selectedRide?.id === ride.id) {
       setSelectedRide(null);
@@ -484,6 +556,7 @@ export default function App() {
         completedRides: nextCompleted,
       },
     }));
+    void loadCompletedHistory();
   };
 
   const handleSaveProfile = async (input: {
@@ -507,6 +580,12 @@ export default function App() {
     }));
   };
 
+  const handleMarkParticipated = (ride: Ride) => {
+    const nextIds = markRideParticipatedLocally(user.telegramId, ride, true);
+    setParticipatedRideIds((prev) => Array.from(new Set([...prev, ...nextIds, ride.id])));
+    void loadCompletedHistory();
+  };
+
   const handleSubmitFeedback = async (ride: Ride, tag: FeedbackTagId) => {
     const toTelegramId = ride.creatorTelegramId;
     if (!toTelegramId || toTelegramId === user.telegramId) return;
@@ -516,6 +595,8 @@ export default function App() {
       toTelegramId,
       tag,
     });
+    const nextIds = markRideParticipatedLocally(user.telegramId, ride, false);
+    setParticipatedRideIds((prev) => Array.from(new Set([...prev, ...nextIds, ride.id])));
     setFeedbackByRecipient((prev) => {
       const existing = prev[toTelegramId] ?? [];
       if (existing.some((f) => f.id === saved.id || (f.rideId === saved.rideId && f.fromTelegramId === saved.fromTelegramId))) {
@@ -526,15 +607,55 @@ export default function App() {
         [toTelegramId]: [saved, ...existing],
       };
     });
+    setCompletedHistory((prev) =>
+      prev.map((item) =>
+        item.id === ride.id ? { ...item, myFeedbackTag: saved.tag } : item
+      )
+    );
+    setSelectedHistoryEntry((prev) =>
+      prev && prev.id === ride.id ? { ...prev, myFeedbackTag: saved.tag } : prev
+    );
+    void loadCompletedHistory();
+  };
+
+  const handleRepeatRide = (ride: Ride) => {
+    setDraft({
+      role: ride.role,
+      fromName: ride.fromName,
+      fromLat: ride.fromLat,
+      fromLng: ride.fromLng,
+      toName: ride.toName,
+      toLat: ride.toLat,
+      toLng: ride.toLng,
+      departurePreset: 'Через 15 мин',
+      customTime: '18:30',
+      priceUah: String(ride.priceUah),
+      seats: ride.seats,
+      comment: ride.comment,
+      tags: ride.tags ?? [],
+    });
+    setPickerTarget(null);
+    setIsCreateOpen(true);
   };
 
   const handleUpdateSeats = async (rideId: string, nextSeats: number) => {
+    const rideSnapshot = rides.find((r) => r.id === rideId);
+    if (nextSeats <= 0) {
+      await deleteRideById(rideId, user.id, rideSnapshot, user.telegramId);
+      setRides((prev) => prev.filter((r) => r.id !== rideId));
+      if (selectedRide?.id === rideId) {
+        setSelectedRide(null);
+      }
+      void loadCompletedHistory();
+      return;
+    }
     const outcome = await updateRideSeats(rideId, user.id, nextSeats);
     if (outcome === 'deleted') {
       setRides((prev) => prev.filter((r) => r.id !== rideId));
       if (selectedRide?.id === rideId) {
         setSelectedRide(null);
       }
+      void loadCompletedHistory();
       return;
     }
     setRides((prev) =>
@@ -803,6 +924,8 @@ export default function App() {
             feedbackByRecipient={feedbackByRecipient}
             onCompleteRide={handleCompleteRide}
             onSubmitFeedback={handleSubmitFeedback}
+            participatedRideIds={participatedRideIds}
+            onMarkParticipated={handleMarkParticipated}
           />
         </section>
       )}
@@ -1108,9 +1231,12 @@ export default function App() {
             <ProfileView
               profile={userProfile}
               feedbackList={feedbackByRecipient[userProfile.telegramId] ?? []}
+              completedHistory={completedHistory}
+              historyLoading={historyLoading}
               isFallbackDemo={user.isFallbackDemo}
               photoUrl={user.photoUrl}
               onSaveProfile={handleSaveProfile}
+              onSelectCompletedRide={(entry) => setSelectedHistoryEntry(entry)}
             />
           ) : loading ? (
             <div className="space-y-3" aria-label="Загрузка заявок">
@@ -1211,6 +1337,30 @@ export default function App() {
           setSelectedRide(ride);
           if (lowDataMode) setLowDataMode(false);
         }}
+      />
+
+      <CompletedRideDetailModal
+        entry={selectedHistoryEntry}
+        theme={theme}
+        mapStyle={mapStyle}
+        accentColor={accentColor}
+        lowDataMode={lowDataMode}
+        currentUser={user}
+        authorProfile={
+          selectedHistoryEntry &&
+          typeof selectedHistoryEntry.ride.creatorTelegramId === 'number'
+            ? profilesByTelegramId[selectedHistoryEntry.ride.creatorTelegramId]
+            : undefined
+        }
+        authorFeedback={
+          selectedHistoryEntry &&
+          typeof selectedHistoryEntry.ride.creatorTelegramId === 'number'
+            ? feedbackByRecipient[selectedHistoryEntry.ride.creatorTelegramId] ?? []
+            : []
+        }
+        onClose={() => setSelectedHistoryEntry(null)}
+        onSubmitFeedback={handleSubmitFeedback}
+        onRepeatRide={handleRepeatRide}
       />
     </div>
   );

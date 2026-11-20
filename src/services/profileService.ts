@@ -332,6 +332,39 @@ export async function fetchFeedbackForUsers(
   return { byRecipient, allVisible: combined };
 }
 
+export async function fetchFeedbackAuthoredByUser(
+  telegramId: number
+): Promise<RideFeedback[]> {
+  if (!Number.isFinite(telegramId) || telegramId <= 0) {
+    return [];
+  }
+
+  const localAuthored = readLocalFeedback().filter(
+    (f) => f.fromTelegramId === telegramId
+  );
+
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('ride_feedback')
+      .select('*')
+      .eq('from_telegram_id', telegramId)
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      const remoteRows = (data as SupabaseFeedbackRow[]).map(mapFeedbackRow);
+      const remoteKeys = new Set(
+        remoteRows.map((f) => `${f.rideId}:${f.fromTelegramId}`)
+      );
+      const localUnsynced = localAuthored.filter(
+        (f) => !remoteKeys.has(`${f.rideId}:${f.fromTelegramId}`)
+      );
+      return [...remoteRows, ...localUnsynced];
+    }
+  }
+
+  return localAuthored;
+}
+
 export async function submitRideFeedback(params: {
   rideId: string;
   fromTelegramId: number;
