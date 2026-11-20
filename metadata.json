@@ -1,0 +1,8 @@
+{
+  "name": "Подвезнун — Попутчики в Харькове",
+  "description": "Telegram Mini App для быстрого поиска попутчиков в Харькове во время блэкаутов и перебоев с транспортом.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
