@@ -476,7 +476,7 @@ export function CompletedRideDetailModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="px-5 py-3.5 border-t border-slate-200 dark:border-slate-800/90 bg-slate-50/70 dark:bg-[#0B0E14]/80 flex items-center gap-2 shrink-0">
+        <div className="px-4 sm:px-5 pt-3 pb-safe border-t border-slate-200 dark:border-slate-800/90 bg-slate-50/70 dark:bg-[#0B0E14]/80 flex items-center gap-2 shrink-0">
           {onRepeatRide && (
             <button
               type="button"

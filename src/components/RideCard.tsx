@@ -31,6 +31,7 @@ interface RideCardProps {
   authorProfile?: UserProfile;
   userLocation?: LatLng | null;
   lowDataMode?: boolean;
+  compactMode?: boolean;
   onSelect: (ride: Ride) => void;
   onDelete?: (rideId: string) => void;
   onUpdateSeats?: (rideId: string, nextSeats: number) => void;
@@ -45,6 +46,7 @@ export function RideCard({
   authorProfile,
   userLocation,
   lowDataMode = false,
+  compactMode = false,
   onSelect,
   onDelete,
   onUpdateSeats,
@@ -76,7 +78,9 @@ export function RideCard({
   return (
     <article
       data-testid={`ride-card-${ride.id}`}
-      className={`rounded-2xl border transition-colors duration-150 p-4 ${
+      className={`rounded-2xl border transition-colors duration-150 ${
+        compactMode ? 'p-2.5 sm:p-3' : 'p-3 sm:p-4'
+      } ${
         isSelected
           ? isDriver
             ? 'bg-emerald-50/70 border-emerald-500/80 dark:bg-[#151D29] dark:border-emerald-500/80'
@@ -95,8 +99,8 @@ export function RideCard({
         aria-label={`Показать маршрут ${ride.fromName} — ${ride.toName}`}
         className="w-full text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] rounded-lg"
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-xs min-w-0">
+        <div className="flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-1.5 sm:gap-2 text-xs min-w-0">
             {isDriver ? (
               <Car className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden="true" />
             ) : (
@@ -129,18 +133,22 @@ export function RideCard({
             )}
           </div>
 
-          <span className="font-mono-tabular text-base font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0">
+          <span className="font-mono-tabular text-[15px] sm:text-base font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0">
             {formatPriceUah(ride.priceUah)}
           </span>
         </div>
 
-        <h3 className="mt-2 text-[15px] font-bold text-slate-900 dark:text-slate-100 leading-snug">
+        <h3
+          className={`${
+            compactMode ? 'mt-1.5 text-sm' : 'mt-2 text-[15px]'
+          } font-bold text-slate-900 dark:text-slate-100 leading-snug`}
+        >
           {ride.fromName}{' '}
-          <span className="text-slate-400 dark:text-slate-500 mx-1">→</span>{' '}
+          <span className="text-slate-400 dark:text-slate-500 mx-0.5 sm:mx-1">→</span>{' '}
           {ride.toName}
         </h3>
 
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 dark:text-slate-400 font-mono-tabular">
+        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 sm:gap-x-2 gap-y-0.5 text-xs text-slate-600 dark:text-slate-400 font-mono-tabular">
           <span>Выезд: {ride.departureLabel}</span>
           <span className="text-slate-300 dark:text-slate-600" aria-hidden="true">
             ·
@@ -165,13 +173,17 @@ export function RideCard({
         </div>
 
         {tags.length > 0 && (
-          <p className="mt-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+          <p className="mt-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
             {tags.map((t) => getTagLabel(t)).join(' · ')}
           </p>
         )}
 
         {ride.comment && (
-          <p className="mt-2 text-[13px] text-slate-700 dark:text-slate-300/90 leading-relaxed">
+          <p
+            className={`${
+              compactMode ? 'mt-1 text-xs line-clamp-1' : 'mt-1.5 text-[13px]'
+            } text-slate-700 dark:text-slate-300/90 leading-relaxed`}
+          >
             {ride.comment}
           </p>
         )}
@@ -179,7 +191,11 @@ export function RideCard({
 
       {/* Owner management controls: seat stepper + lifetime extend */}
       {isMine && onUpdateSeats && onExtendRide && (
-        <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+        <div
+          className={`${
+            compactMode ? 'mt-2 pt-2' : 'mt-2.5 pt-2.5'
+          } border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2`}
+        >
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mr-0.5">
               Мест:

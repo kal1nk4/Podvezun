@@ -14,7 +14,9 @@ import {
   formatDistanceFromUser,
   formatHistoryDateTime,
   formatPriceUah,
+  getNextSheetSnap,
   getTopFeedbackTags,
+  computeNextSheetSnapFromSwipe,
   haversineDistanceKm,
   isRideCreatedByUser,
   isRideExpired,
@@ -411,6 +413,18 @@ test('mergeCompletedRideHistory merges created and participated rides, excludes 
   assert.deepEqual(merged[0].receivedFeedbackTags, ['По пути']);
   assert.equal(merged[1].participation, 'participated');
   assert.equal(merged[1].myFeedbackTag, 'Вовремя');
+});
+
+test('getNextSheetSnap and computeNextSheetSnapFromSwipe cycle mobile bottom sheet cleanly', () => {
+  assert.equal(getNextSheetSnap('half'), 'collapsed');
+  assert.equal(getNextSheetSnap('collapsed'), 'half');
+  assert.equal(getNextSheetSnap('expanded'), 'half');
+
+  assert.equal(computeNextSheetSnapFromSwipe('half', -12), 'half');
+  assert.equal(computeNextSheetSnapFromSwipe('collapsed', -60), 'half');
+  assert.equal(computeNextSheetSnapFromSwipe('half', -60), 'expanded');
+  assert.equal(computeNextSheetSnapFromSwipe('expanded', 60), 'half');
+  assert.equal(computeNextSheetSnapFromSwipe('half', 60), 'collapsed');
 });
 
 

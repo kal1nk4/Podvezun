@@ -639,3 +639,29 @@ export function mergeCompletedRideHistory(
   });
 }
 
+export function getNextSheetSnap(
+  current: import('../types/ride').SheetSnap
+): import('../types/ride').SheetSnap {
+  if (current === 'collapsed') return 'half';
+  if (current === 'half') return 'collapsed';
+  return 'half';
+}
+
+export function computeNextSheetSnapFromSwipe(
+  current: import('../types/ride').SheetSnap,
+  deltaY: number,
+  thresholdPx: number = 36
+): import('../types/ride').SheetSnap {
+  if (Math.abs(deltaY) < thresholdPx) {
+    return current;
+  }
+  // Swipe up (negative deltaY) expands sheet
+  if (deltaY < 0) {
+    if (current === 'collapsed') return 'half';
+    return 'expanded';
+  }
+  // Swipe down (positive deltaY) collapses sheet
+  if (current === 'expanded') return 'half';
+  return 'collapsed';
+}
+

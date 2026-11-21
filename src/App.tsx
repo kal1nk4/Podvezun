@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   BellRing,
+  ChevronDown,
+  ChevronUp,
   LocateFixed,
   Map as MapIcon,
   Plus,
   RotateCcw,
   Route,
+  Settings,
   User as UserIcon,
-  WifiOff,
   X,
 } from 'lucide-react';
 import { CompletedRideDetailModal } from './components/CompletedRideDetailModal';
@@ -16,7 +19,7 @@ import { KharkivMap, type MapPickerTarget } from './components/KharkivMap';
 import { ProfileView } from './components/ProfileView';
 import { RideCard } from './components/RideCard';
 import { RouteRadarModal } from './components/RouteRadarModal';
-import { ThemeCustomizer } from './components/ThemeCustomizer';
+import { SettingsModal } from './components/SettingsModal';
 import {
   fetchFeedbackAuthoredByUser,
   fetchFeedbackForUsers,
@@ -53,43 +56,62 @@ import type {
   RideFeedback,
   RideFilter,
   RouteWatchAlert,
+  SheetSnap,
   TelegramUserProfile,
   ThemeMode,
+  ThemePreference,
   UserProfile,
 } from './types/ride';
 import {
   ALL_KHARKIV_POINTS,
   buildShareRideLink,
   buildShareRideText,
+  computeNextSheetSnapFromSwipe,
   describePickedCoordinates,
   filterActiveRides,
   findMatchingWatchedRides,
+  getNextSheetSnap,
   isRideCreatedByUser,
   parseSharedRideId,
 } from './utils/ridesLogic';
 import {
   applyTelegramThemeColors,
+  getTelegramColorScheme,
   getTelegramStartParam,
   initTelegramWebApp,
   requestUserGeolocation,
   shareRideToTelegram,
+  subscribeTelegramThemeChange,
+  syncTelegramViewportHeight,
   triggerHaptic,
 } from './utils/telegram';
 import {
   ACCENT_STORAGE_KEY,
+  COMPACT_MODE_STORAGE_KEY,
   isValidAccentColor,
   isValidMapStyle,
+  isValidThemePreference,
   MAP_STYLE_STORAGE_KEY,
   resolveCssAccentVars,
+  resolveEffectiveTheme,
+  THEME_PREF_STORAGE_KEY,
   THEME_STORAGE_KEY,
 } from './utils/themeConfig';
 
 const LOW_DATA_STORAGE_KEY = 'podvezun_low_data_mode';
 
-function getInitialTheme(): ThemeMode {
-  if (typeof window === 'undefined') return 'dark';
-  const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return saved === 'light' ? 'light' : 'dark';
+function getInitialThemePreference(): ThemePreference {
+  if (typeof window === 'undefined') return 'auto';
+  const savedPref = window.localStorage.getItem(THEME_PREF_STORAGE_KEY);
+  if (isValidThemePreference(savedPref)) return savedPref;
+  const legacy = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (legacy === 'light' || legacy === 'dark') return legacy;
+  return 'auto';
+}
+
+function getSystemPrefersDark(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return true;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
 function getInitialMapStyle(theme: ThemeMode): MapStyleId {
@@ -105,6 +127,11 @@ function getInitialAccentColor(): AccentColorId {
   if (typeof window === 'undefined') return 'emerald';
   const saved = window.localStorage.getItem(ACCENT_STORAGE_KEY);
   return isValidAccentColor(saved) ? saved : 'emerald';
+}
+
+function getInitialCompactMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(COMPACT_MODE_STORAGE_KEY) === '1';
 }
 
 function getInitialLowDataMode(): boolean {
@@ -130,12 +157,33 @@ const INITIAL_DRAFT: CreateRideDraft = {
 
 export default function App() {
   const [user] = useState<TelegramUserProfile>(() => initTelegramWebApp());
-  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(
+    getInitialThemePreference
+  );
+  const [telegramColorScheme, setTelegramColorScheme] = useState<ThemeMode | null>(
+    getTelegramColorScheme
+  );
+  const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(
+    getSystemPrefersDark
+  );
+  const theme: ThemeMode = useMemo(
+    () => resolveEffectiveTheme(themePreference, telegramColorScheme, systemPrefersDark),
+    [themePreference, telegramColorScheme, systemPrefersDark]
+  );
+
   const [accentColor, setAccentColor] = useState<AccentColorId>(getInitialAccentColor);
   const [mapStyle, setMapStyle] = useState<MapStyleId>(() =>
-    getInitialMapStyle(getInitialTheme())
+    getInitialMapStyle(
+      resolveEffectiveTheme(
+        getInitialThemePreference(),
+        getTelegramColorScheme(),
+        getSystemPrefersDark()
+      )
+    )
   );
+  const [compactMode, setCompactMode] = useState<boolean>(getInitialCompactMode);
   const [lowDataMode, setLowDataMode] = useState<boolean>(getInitialLowDataMode);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [rides, setRides] = useState<Ride[]>([]);
   const [loading, setLoading] = useState(true);
@@ -150,6 +198,8 @@ export default function App() {
   const [locationNotice, setLocationNotice] = useState<string | null>(null);
 
   const [appView, setAppView] = useState<AppView>('feed');
+  const [sheetSnap, setSheetSnap] = useState<SheetSnap>('half');
+  const sheetSwipeStartYRef = useRef<number | null>(null);
   const [selectedRide, setSelectedRide] = useState<Ride | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
@@ -188,9 +238,33 @@ export default function App() {
   const notifiedIdsRef = useRef<Set<string>>(new Set());
   const deepLinkHandledRef = useRef(false);
 
+  // Subscribe to Telegram viewport height & colorScheme changes + system color scheme
+  useEffect(() => {
+    const stopViewportSync = syncTelegramViewportHeight();
+    const stopTgTheme = subscribeTelegramThemeChange(() => {
+      setTelegramColorScheme(getTelegramColorScheme());
+    });
+
+    const mediaQuery =
+      typeof window !== 'undefined' && window.matchMedia
+        ? window.matchMedia('(prefers-color-scheme: dark)')
+        : null;
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      setSystemPrefersDark(e.matches);
+    };
+    mediaQuery?.addEventListener('change', handleMediaChange);
+
+    return () => {
+      stopViewportSync();
+      stopTgTheme();
+      mediaQuery?.removeEventListener('change', handleMediaChange);
+    };
+  }, []);
+
   // Sync theme & accent CSS custom properties to documentElement, localStorage, and Telegram WebApp
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
+    window.localStorage.setItem(THEME_PREF_STORAGE_KEY, themePreference);
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     window.localStorage.setItem(ACCENT_STORAGE_KEY, accentColor);
 
@@ -204,7 +278,11 @@ export default function App() {
       metaTheme.setAttribute('content', theme === 'dark' ? '#0B0E14' : '#F8FAFC');
     }
     applyTelegramThemeColors(theme);
-  }, [theme, accentColor]);
+  }, [theme, themePreference, accentColor]);
+
+  useEffect(() => {
+    window.localStorage.setItem(COMPACT_MODE_STORAGE_KEY, compactMode ? '1' : '0');
+  }, [compactMode]);
 
   useEffect(() => {
     window.localStorage.setItem(LOW_DATA_STORAGE_KEY, lowDataMode ? '1' : '0');
@@ -214,16 +292,17 @@ export default function App() {
     writeWatchedAlerts(alerts);
   }, [alerts]);
 
-  const toggleTheme = () => {
-    triggerHaptic('light');
-    setTheme((prev) => {
-      const next = prev === 'dark' ? 'light' : 'dark';
-      const savedMapStyle = window.localStorage.getItem(MAP_STYLE_STORAGE_KEY);
-      if (!isValidMapStyle(savedMapStyle)) {
-        setMapStyle(next === 'dark' ? 'twilight' : 'osm');
-      }
-      return next;
-    });
+  const handleChangeThemePreference = (nextPref: ThemePreference) => {
+    setThemePreference(nextPref);
+    const nextEffective = resolveEffectiveTheme(
+      nextPref,
+      telegramColorScheme,
+      systemPrefersDark
+    );
+    const savedMapStyle = window.localStorage.getItem(MAP_STYLE_STORAGE_KEY);
+    if (!isValidMapStyle(savedMapStyle)) {
+      setMapStyle(nextEffective === 'dark' ? 'twilight' : 'osm');
+    }
   };
 
   const handleChangeAccentColor = (nextAccent: AccentColorId) => {
@@ -235,6 +314,13 @@ export default function App() {
     setMapStyle(nextStyle);
     window.localStorage.setItem(MAP_STYLE_STORAGE_KEY, nextStyle);
   };
+
+  const handleSelectRide = useCallback((ride: Ride | null) => {
+    setSelectedRide(ride);
+    if (ride && typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setSheetSnap('collapsed');
+    }
+  }, []);
 
   const loadRides = useCallback(async () => {
     try {
@@ -755,33 +841,74 @@ export default function App() {
   const showRadarBanner =
     watchedMatches.length > 0 && currentMatchSignature !== dismissedMatchIds;
 
+  const isMobileSheetMode = !lowDataMode && appView !== 'profile';
+  const mainSheetHeightClass = !isMobileSheetMode
+    ? 'flex-1 min-h-0'
+    : sheetSnap === 'collapsed'
+      ? 'shrink-0 lg:flex-1 lg:min-h-0 lg:h-full'
+      : sheetSnap === 'expanded'
+        ? 'h-[76dvh] shrink-0 lg:flex-1 lg:min-h-0 lg:h-full'
+        : 'h-[49dvh] shrink-0 lg:flex-1 lg:min-h-0 lg:h-full';
+
+  const handleSheetPointerDown = (e: React.PointerEvent<HTMLElement>) => {
+    sheetSwipeStartYRef.current = e.clientY;
+  };
+
+  const handleSheetPointerUp = (e: React.PointerEvent<HTMLElement>) => {
+    if (sheetSwipeStartYRef.current === null) return;
+    const deltaY = e.clientY - sheetSwipeStartYRef.current;
+    sheetSwipeStartYRef.current = null;
+    if (Math.abs(deltaY) >= 32) {
+      triggerHaptic('light');
+      setSheetSnap((prev) => computeNextSheetSnapFromSwipe(prev, deltaY, 32));
+    }
+  };
+
   return (
     <div
-      className={`h-[100dvh] w-full flex flex-col bg-slate-50 text-slate-900 dark:bg-[#0B0E14] dark:text-slate-100 overflow-hidden ${
+      className={`app-shell-height w-full flex flex-col bg-slate-50 text-slate-900 dark:bg-[#0B0E14] dark:text-slate-100 overflow-hidden ${
+        compactMode ? 'podvezun-compact' : ''
+      } ${
         lowDataMode
           ? ''
           : 'lg:grid lg:grid-cols-[1fr_440px] xl:grid-cols-[1fr_480px]'
       }`}
     >
-      {/* Compact mobile header: Brand + Explicit Profile shortcut + Theme */}
-      <header className="lg:hidden px-3 py-2 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] flex items-center justify-between gap-2 shrink-0 z-30">
-        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+      {/* Compact Single-Row Mobile Header: Brand + Profile (or Back to Map) + Unified Settings */}
+      <header className="lg:hidden pt-safe px-3 py-1.5 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] flex items-center justify-between gap-2 shrink-0 z-30">
+        <div className="flex items-center gap-1.5 min-w-0">
           <Route className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
-          <span className="text-[15px] sm:text-base font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap">
+          <span className="text-[15px] font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap">
             Подвезун
           </span>
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {appView === 'profile' && (
+            <button
+              type="button"
+              data-testid="mobile-back-to-map-btn"
+              onClick={() => {
+                triggerHaptic('light');
+                setAppView('feed');
+              }}
+              className="min-h-[40px] px-2.5 rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-800 dark:border-slate-800 dark:bg-[#131822] dark:hover:bg-slate-800 dark:text-slate-100 text-xs font-bold flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>Карта</span>
+            </button>
+          )}
+
           <button
             type="button"
+            data-testid="mobile-profile-btn"
             onClick={() => {
               triggerHaptic('light');
-              setAppView('profile');
+              setAppView((prev) => (prev === 'profile' ? 'feed' : 'profile'));
             }}
             aria-label="Открыть профиль"
             aria-pressed={appView === 'profile'}
-            className={`min-h-[36px] px-2 sm:px-2.5 rounded-xl border text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+            className={`min-h-[40px] px-2.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
               appView === 'profile'
                 ? 'bg-[var(--accent-primary)] border-[var(--accent-primary)] text-[var(--accent-fg)]'
                 : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-800 dark:bg-[#131822] dark:hover:bg-slate-800 dark:border-slate-800 dark:text-slate-100'
@@ -791,86 +918,37 @@ export default function App() {
             <span>Профиль</span>
           </button>
 
-          <ThemeCustomizer
-            theme={theme}
-            accentColor={accentColor}
-            onToggleTheme={toggleTheme}
-            onChangeAccent={handleChangeAccentColor}
-            compact
-          />
+          <button
+            type="button"
+            data-testid="settings-btn"
+            onClick={() => {
+              triggerHaptic('light');
+              setIsSettingsOpen(true);
+            }}
+            aria-label="Настройки"
+            title="Настройки"
+            className="min-h-[40px] min-w-[40px] rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-800 dark:border-slate-800 dark:bg-[#131822] dark:hover:bg-slate-800 dark:text-slate-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+          >
+            <Settings className="w-4 h-4" aria-hidden="true" />
+          </button>
         </div>
       </header>
 
-      {/* Dedicated mobile 3-tab switcher (always visible & spacious on any phone width) */}
-      <nav
-        aria-label="Разделы"
-        className="lg:hidden px-3 py-1.5 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] shrink-0 z-20"
-      >
-        <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-[#131822] p-1 rounded-xl border border-slate-200 dark:border-slate-800">
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic('light');
-              setAppView('feed');
-            }}
-            aria-pressed={appView === 'feed'}
-            className={`min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center ${
-              appView === 'feed'
-                ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
-                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-            }`}
-          >
-            Лента
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic('light');
-              setAppView('mine');
-            }}
-            aria-pressed={appView === 'mine'}
-            className={`min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center ${
-              appView === 'mine'
-                ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
-                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-            }`}
-          >
-            Мои ({myRides.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic('light');
-              setAppView('profile');
-            }}
-            aria-pressed={appView === 'profile'}
-            className={`min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1 ${
-              appView === 'profile'
-                ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 font-bold'
-                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-            }`}
-          >
-            <UserIcon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span>Профиль</span>
-          </button>
-        </div>
-      </nav>
-
-      {/* Interactive Kharkiv Map (hidden cleanly in low-data mode, and collapsed on mobile when viewing Profile) */}
+      {/* Interactive Kharkiv Map (fills all available height above collapsible mobile sheet) */}
       {!lowDataMode && (
         <section
           aria-label="Карта попутчиков Харькова"
-          className={`relative h-[43dvh] min-h-[225px] sm:h-[46dvh] lg:h-full w-full shrink-0 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800/80 ${
+          className={`relative flex-1 min-h-[160px] lg:flex-none lg:h-full w-full border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800/80 ${
             appView === 'profile' ? 'hidden lg:block' : ''
           }`}
         >
-          {/* Top role filter segmented control */}
+          {/* Floating role filter control */}
           {!pickerTarget && (
-            <div className="absolute top-3 left-3 right-3 sm:right-auto z-[500] flex items-center justify-between gap-2 pointer-events-none">
+            <div className="absolute top-2.5 left-2.5 right-14 sm:right-auto z-[500] flex items-center gap-2 pointer-events-none">
               <div
                 role="group"
                 aria-label="Фильтр по роли"
-                className="pointer-events-auto inline-flex items-center gap-1 p-1 rounded-2xl bg-white/92 dark:bg-[#131822]/92 border border-slate-200 dark:border-slate-700/80 shadow-xl backdrop-blur-md"
+                className="pointer-events-auto inline-flex items-center gap-0.5 sm:gap-1 p-1 rounded-2xl bg-white/92 dark:bg-[#131822]/92 border border-slate-200 dark:border-slate-700/80 shadow-xl backdrop-blur-md"
               >
                 {filterButtons.map((btn) => (
                   <button
@@ -881,7 +959,7 @@ export default function App() {
                       setRoleFilter(btn.id);
                     }}
                     aria-pressed={roleFilter === btn.id}
-                    className={`min-h-[34px] sm:min-h-[38px] px-2 sm:px-3.5 rounded-xl text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    className={`min-h-[36px] sm:min-h-[38px] px-2.5 sm:px-3.5 rounded-xl text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       roleFilter === btn.id
                         ? 'bg-[var(--accent-primary)] text-[var(--accent-fg)] font-bold'
                         : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800/70'
@@ -897,7 +975,7 @@ export default function App() {
           <KharkivMap
             rides={visibleRides}
             selectedRide={selectedRide}
-            onSelectRide={setSelectedRide}
+            onSelectRide={handleSelectRide}
             pickerTarget={pickerTarget}
             draftFrom={{
               name: draft.fromName,
@@ -914,7 +992,7 @@ export default function App() {
             theme={theme}
             mapStyle={mapStyle}
             accentColor={accentColor}
-            onChangeMapStyle={handleChangeMapStyle}
+            compactMode={compactMode}
             userLocation={userLocation}
             locatingUser={locatingUser}
             onLocateMe={() => void handleLocateOnMap()}
@@ -930,12 +1008,68 @@ export default function App() {
         </section>
       )}
 
-      {/* Right / Bottom Panel */}
+      {/* Right Desktop Sidebar / Mobile Collapsible Bottom Sheet */}
       <main
-        className={`flex-1 min-h-0 flex flex-col bg-slate-50 dark:bg-[#0B0E14] ${
-          lowDataMode ? 'w-full max-w-2xl mx-auto lg:border-x lg:border-slate-200 lg:dark:border-slate-800/80' : ''
+        data-testid="mobile-bottom-sheet"
+        data-sheet-snap={sheetSnap}
+        className={`${mainSheetHeightClass} flex flex-col bg-slate-50 dark:bg-[#0B0E14] ${
+          lowDataMode
+            ? 'w-full max-w-2xl mx-auto lg:border-x lg:border-slate-200 lg:dark:border-slate-800/80'
+            : ''
         }`}
       >
+        {/* Mobile Collapsible Bottom Sheet Handle & Toggle Header */}
+        {isMobileSheetMode && (
+          <div
+            onPointerDown={handleSheetPointerDown}
+            onPointerUp={handleSheetPointerUp}
+            className="lg:hidden rounded-t-2xl border-t border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] px-3 pt-1 pb-1 shrink-0 select-none touch-none"
+          >
+            <button
+              type="button"
+              data-testid="sheet-toggle-btn"
+              onClick={() => {
+                triggerHaptic('light');
+                setSheetSnap((prev) => getNextSheetSnap(prev));
+              }}
+              aria-expanded={sheetSnap !== 'collapsed'}
+              aria-label={
+                sheetSnap === 'collapsed'
+                  ? 'Показать список маршрутов'
+                  : 'Свернуть список и показать карту на весь экран'
+              }
+              className="w-full min-h-[40px] flex flex-col items-center justify-center gap-0.5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] rounded-xl"
+            >
+              <span
+                className="w-9 h-1 rounded-full bg-slate-300 dark:bg-slate-700"
+                aria-hidden="true"
+              />
+              <span className="w-full flex items-center justify-between gap-2 text-xs px-0.5">
+                <span className="font-bold text-slate-900 dark:text-slate-100">
+                  {appView === 'mine' ? 'Мои заявки' : 'Маршруты Харькова'}{' '}
+                  <span className="font-mono-tabular text-[var(--accent-text)]">
+                    ({visibleRides.length})
+                  </span>
+                </span>
+                <span className="inline-flex items-center gap-1 font-semibold text-slate-500 dark:text-slate-400">
+                  <span>
+                    {sheetSnap === 'collapsed'
+                      ? 'Показать список'
+                      : sheetSnap === 'half'
+                        ? 'Скрыть список'
+                        : 'Свернуть'}
+                  </span>
+                  {sheetSnap === 'collapsed' ? (
+                    <ChevronUp className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  )}
+                </span>
+              </span>
+            </button>
+          </div>
+        )}
+
         {/* Desktop Top Header inside sidebar */}
         <header className="hidden lg:block px-5 pt-3.5 pb-3 space-y-2.5 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] shrink-0">
           <div className="flex items-center justify-between gap-2">
@@ -946,12 +1080,19 @@ export default function App() {
               </h1>
             </div>
 
-            <ThemeCustomizer
-              theme={theme}
-              accentColor={accentColor}
-              onToggleTheme={toggleTheme}
-              onChangeAccent={handleChangeAccentColor}
-            />
+            <button
+              type="button"
+              data-testid="desktop-settings-btn"
+              onClick={() => {
+                triggerHaptic('light');
+                setIsSettingsOpen(true);
+              }}
+              aria-label="Настройки"
+              className="min-h-[38px] px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800 dark:border-slate-800 dark:bg-[#131822] dark:hover:bg-slate-800 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <Settings className="w-4 h-4 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+              <span>Настройки</span>
+            </button>
           </div>
 
           <nav
@@ -1007,226 +1148,257 @@ export default function App() {
           </nav>
         </header>
 
-        {/* Sub-header + Utility Tools + District & Proximity Filter Bar (hidden on Profile tab) */}
+        {/* Sub-header: Mobile Feed/Mine switcher + Radar + District Filters */}
         {appView !== 'profile' && (
-          <div className="px-4 lg:px-5 pt-2.5 pb-2.5 space-y-2 border-b border-slate-200/70 dark:border-slate-800/70 shrink-0">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0 text-xs text-slate-500 dark:text-slate-400">
-              <span className="truncate">
-                {appView === 'mine'
-                  ? 'Ваши активные маршруты'
-                  : 'Поездки по Харькову'}
-              </span>
-              <span className="font-mono-tabular text-slate-700 dark:text-slate-300 font-bold shrink-0">
-                {visibleRides.length}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHaptic('light');
-                  setIsRadarOpen(true);
-                }}
-                aria-label="Открыть радар попутчиков"
-                className={`min-h-[34px] px-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
-                  watchedMatches.length > 0
-                    ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-text)] font-bold'
-                    : 'bg-white dark:bg-[#131822] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                <BellRing className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                <span>Радар</span>
-                {alerts.length > 0 && (
-                  <span className="font-mono-tabular text-[11px] opacity-90">
-                    ({watchedMatches.length > 0 ? watchedMatches.length : alerts.length})
-                  </span>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHaptic('light');
-                  setLowDataMode((prev) => !prev);
-                }}
-                aria-pressed={lowDataMode}
-                aria-label={lowDataMode ? 'Включить карту' : 'Режим без карты (экономия связи и батареи)'}
-                title={lowDataMode ? 'Показать карту' : 'Эконом-режим без карты'}
-                className={`min-h-[34px] px-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
-                  lowDataMode
-                    ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-text)] font-bold'
-                    : 'bg-white dark:bg-[#131822] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {lowDataMode ? (
-                  <>
-                    <MapIcon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                    <span>Карта</span>
-                  </>
-                ) : (
-                  <>
-                    <WifiOff className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                    <span>Без карты</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
-          {/* When map is disabled in low-data mode, show role filter cleanly in the list header */}
-          {lowDataMode && (
-            <div className="flex items-center justify-between gap-2 pt-0.5">
-              <div
-                role="group"
-                aria-label="Фильтр по роли в списке"
-                className="inline-flex items-center gap-1 p-1 rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800"
-              >
-                {filterButtons.map((btn) => (
-                  <button
-                    key={btn.id}
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic('light');
-                      setRoleFilter(btn.id);
-                    }}
-                    aria-pressed={roleFilter === btn.id}
-                    className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                      roleFilter === btn.id
-                        ? 'bg-[var(--accent-primary)] text-[var(--accent-fg)] font-bold'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    {btn.label}
-                  </button>
-                ))}
-              </div>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                Эконом-режим
-              </span>
-            </div>
-          )}
-
-          {/* District From / To + Nearby Proximity Filter */}
-          <div className="flex items-center gap-1.5">
-            <select
-              aria-label="Фильтр по району отправления"
-              value={fromDistrict}
-              onChange={(e) => setFromDistrict(e.target.value)}
-              className="flex-1 min-w-0 min-h-[36px] rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 px-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:border-[var(--accent-primary)]"
-            >
-              <option value="">Откуда: все</option>
-              {ALL_KHARKIV_POINTS.map((lm) => (
-                <option key={lm.id} value={lm.name}>
-                  Из: {lm.name}
-                </option>
-              ))}
-            </select>
-
-            <select
-              aria-label="Фильтр по району назначения"
-              value={toDistrict}
-              onChange={(e) => setToDistrict(e.target.value)}
-              className="flex-1 min-w-0 min-h-[36px] rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 px-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:border-[var(--accent-primary)]"
-            >
-              <option value="">Куда: все</option>
-              {ALL_KHARKIV_POINTS.map((lm) => (
-                <option key={lm.id} value={lm.name}>
-                  В: {lm.name}
-                </option>
-              ))}
-            </select>
-
-            <button
-              type="button"
-              onClick={() => void handleToggleNearby()}
-              disabled={locatingUser}
-              aria-pressed={sortByProximity}
-              aria-label="Сортировать по близости ко мне"
-              title="Показать ближайшие поездки"
-              className={`min-h-[36px] px-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60 ${
-                sortByProximity
-                  ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-text)] font-bold'
-                  : 'bg-white dark:bg-[#131822] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <LocateFixed className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className="hidden sm:inline">Рядом</span>
-            </button>
-
-            {hasFiltersActive && (
-              <button
-                type="button"
-                onClick={() => {
-                  setFromDistrict('');
-                  setToDistrict('');
-                  setSortByProximity(false);
-                }}
-                aria-label="Сбросить фильтры районов"
-                title="Сбросить фильтры"
-                className="min-h-[36px] min-w-[36px] rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 flex items-center justify-center shrink-0 cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            )}
-          </div>
-
-          {locationNotice && (
-            <div className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
-              <span>{locationNotice}</span>
-              <button
-                type="button"
-                onClick={() => setLocationNotice(null)}
-                aria-label="Скрыть уведомление о геолокации"
-                className="p-0.5 hover:opacity-80 cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
-          {showRadarBanner && (
-            <div
-              role="status"
-              className="flex items-center justify-between gap-2 rounded-xl bg-[var(--accent-soft)] border border-[var(--accent-border)] px-3 py-2 text-xs"
-            >
-              <div className="min-w-0">
-                <span className="font-bold text-[var(--accent-text)]">
-                  Радар: {watchedMatches.length} совп.
-                </span>{' '}
-                <span className="text-slate-700 dark:text-slate-200 truncate">
-                  {watchedMatches[0].fromName} → {watchedMatches[0].toName}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
+          <div
+            className={`${
+              isMobileSheetMode && sheetSnap === 'collapsed' ? 'hidden lg:block' : ''
+            } px-3 sm:px-4 lg:px-5 pt-1.5 pb-1.5 space-y-1.5 border-b border-slate-200/70 dark:border-slate-800/70 shrink-0`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              {/* Mobile Feed / Mine quick switcher */}
+              <div className="lg:hidden inline-flex items-center gap-1 p-0.5 rounded-xl bg-slate-200/70 dark:bg-[#131822] border border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => {
+                    triggerHaptic('light');
                     setAppView('feed');
-                    setSelectedRide(watchedMatches[0]);
-                    if (lowDataMode) setLowDataMode(false);
                   }}
-                  className="px-2.5 py-1 rounded-lg bg-[var(--accent-primary)] text-[var(--accent-fg)] font-bold cursor-pointer whitespace-nowrap"
+                  aria-pressed={appView === 'feed'}
+                  className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                    appView === 'feed'
+                      ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-100 dark:text-slate-950 font-bold'
+                      : 'text-slate-600 dark:text-slate-300'
+                  }`}
                 >
-                  Открыть
+                  Лента
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDismissedMatchIds(currentMatchSignature)}
-                  aria-label="Скрыть оповещение радара"
-                  className="p-1 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 cursor-pointer"
+                  onClick={() => {
+                    triggerHaptic('light');
+                    setAppView('mine');
+                  }}
+                  aria-pressed={appView === 'mine'}
+                  className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                    appView === 'mine'
+                      ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-100 dark:text-slate-950 font-bold'
+                      : 'text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  Мои ({myRides.length})
+                </button>
+              </div>
+
+              {/* Desktop route count label */}
+              <div className="hidden lg:flex items-center gap-2 min-w-0 text-xs text-slate-500 dark:text-slate-400">
+                <span className="truncate">
+                  {appView === 'mine'
+                    ? 'Ваши активные маршруты'
+                    : 'Поездки по Харькову'}
+                </span>
+                <span className="font-mono-tabular text-slate-700 dark:text-slate-300 font-bold shrink-0">
+                  {visibleRides.length}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                {lowDataMode && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light');
+                      setLowDataMode(false);
+                    }}
+                    className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131822] text-xs font-semibold text-[var(--accent-text)] flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  >
+                    <MapIcon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>Карта</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light');
+                    setIsRadarOpen(true);
+                  }}
+                  aria-label="Открыть радар попутчиков"
+                  className={`min-h-[38px] px-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                    watchedMatches.length > 0
+                      ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-text)] font-bold'
+                      : 'bg-white dark:bg-[#131822] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <BellRing className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  <span>Радар</span>
+                  {alerts.length > 0 && (
+                    <span className="font-mono-tabular text-[11px] opacity-90">
+                      ({watchedMatches.length > 0 ? watchedMatches.length : alerts.length})
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* When map is disabled in low-data mode, show role filter cleanly in the list header */}
+            {lowDataMode && (
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <div
+                  role="group"
+                  aria-label="Фильтр по роли в списке"
+                  className="inline-flex items-center gap-1 p-1 rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800"
+                >
+                  {filterButtons.map((btn) => (
+                    <button
+                      key={btn.id}
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light');
+                        setRoleFilter(btn.id);
+                      }}
+                      aria-pressed={roleFilter === btn.id}
+                      className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                        roleFilter === btn.id
+                          ? 'bg-[var(--accent-primary)] text-[var(--accent-fg)] font-bold'
+                          : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Без карты
+                </span>
+              </div>
+            )}
+
+            {/* District From / To + Nearby Proximity Filter */}
+            <div className="flex items-center gap-1.5">
+              <select
+                aria-label="Фильтр по району отправления"
+                value={fromDistrict}
+                onChange={(e) => setFromDistrict(e.target.value)}
+                className="flex-1 min-w-0 min-h-[40px] rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 px-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:border-[var(--accent-primary)]"
+              >
+                <option value="">Откуда: все</option>
+                {ALL_KHARKIV_POINTS.map((lm) => (
+                  <option key={lm.id} value={lm.name}>
+                    Из: {lm.name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                aria-label="Фильтр по району назначения"
+                value={toDistrict}
+                onChange={(e) => setToDistrict(e.target.value)}
+                className="flex-1 min-w-0 min-h-[40px] rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 px-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:border-[var(--accent-primary)]"
+              >
+                <option value="">Куда: все</option>
+                {ALL_KHARKIV_POINTS.map((lm) => (
+                  <option key={lm.id} value={lm.name}>
+                    В: {lm.name}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => void handleToggleNearby()}
+                disabled={locatingUser}
+                aria-pressed={sortByProximity}
+                aria-label="Сортировать по близости ко мне"
+                title="Показать ближайшие поездки"
+                className={`min-h-[40px] px-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60 ${
+                  sortByProximity
+                    ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-text)] font-bold'
+                    : 'bg-white dark:bg-[#131822] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <LocateFixed className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span className="hidden sm:inline">Рядом</span>
+              </button>
+
+              {hasFiltersActive && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFromDistrict('');
+                    setToDistrict('');
+                    setSortByProximity(false);
+                  }}
+                  aria-label="Сбросить фильтры районов"
+                  title="Сбросить фильтры"
+                  className="min-h-[40px] min-w-[40px] rounded-xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 flex items-center justify-center shrink-0 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              )}
+            </div>
+
+            {locationNotice && (
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+                <span>{locationNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setLocationNotice(null)}
+                  aria-label="Скрыть уведомление о геолокации"
+                  className="p-0.5 hover:opacity-80 cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-            </div>
-          )}
+            )}
+
+            {showRadarBanner && (
+              <div
+                role="status"
+                className="flex items-center justify-between gap-2 rounded-xl bg-[var(--accent-soft)] border border-[var(--accent-border)] px-3 py-2 text-xs"
+              >
+                <div className="min-w-0">
+                  <span className="font-bold text-[var(--accent-text)]">
+                    Радар: {watchedMatches.length} совп.
+                  </span>{' '}
+                  <span className="text-slate-700 dark:text-slate-200 truncate">
+                    {watchedMatches[0].fromName} → {watchedMatches[0].toName}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAppView('feed');
+                      handleSelectRide(watchedMatches[0]);
+                      if (lowDataMode) setLowDataMode(false);
+                    }}
+                    className="min-h-[34px] px-2.5 rounded-lg bg-[var(--accent-primary)] text-[var(--accent-fg)] font-bold cursor-pointer whitespace-nowrap"
+                  >
+                    Открыть
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDismissedMatchIds(currentMatchSignature)}
+                    aria-label="Скрыть оповещение радара"
+                    className="min-h-[34px] min-w-[34px] flex items-center justify-center text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Scrollable Ride Cards Feed or Profile View */}
-        <div className="flex-1 min-h-0 overflow-y-auto theme-scroll px-4 lg:px-5 pt-3 pb-4 space-y-3">
+        <div
+          className={`${
+            isMobileSheetMode && sheetSnap === 'collapsed' ? 'hidden lg:block' : 'flex-1 min-h-0'
+          } overflow-y-auto theme-scroll px-3 sm:px-4 lg:px-5 pt-2.5 pb-3 ${
+            compactMode ? 'space-y-2' : 'space-y-2.5 sm:space-y-3'
+          }`}
+        >
           {appView === 'profile' ? (
             <ProfileView
               profile={userProfile}
@@ -1243,7 +1415,7 @@ export default function App() {
               {[1, 2, 3].map((item) => (
                 <div
                   key={item}
-                  className="h-32 rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800/70 animate-pulse"
+                  className="h-28 rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800/70 animate-pulse"
                 />
               ))}
             </div>
@@ -1259,7 +1431,7 @@ export default function App() {
               </button>
             </div>
           ) : visibleRides.length === 0 ? (
-            <div className="rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800/80 p-6 text-center">
+            <div className="rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800/80 p-5 text-center">
               <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
                 {appView === 'mine'
                   ? 'У вас пока нет активных заявок'
@@ -1285,7 +1457,8 @@ export default function App() {
                 }
                 userLocation={sortByProximity ? userLocation : null}
                 lowDataMode={lowDataMode}
-                onSelect={(r) => setSelectedRide(r)}
+                compactMode={compactMode}
+                onSelect={(r) => handleSelectRide(r)}
                 onDelete={handleDeleteRide}
                 onUpdateSeats={handleUpdateSeats}
                 onExtendRide={handleExtendRide}
@@ -1295,18 +1468,35 @@ export default function App() {
           )}
         </div>
 
-        {/* Ergonomic Bottom CTA */}
-        <div className="px-4 lg:px-5 py-3 border-t border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] shrink-0">
+        {/* Ergonomic Bottom CTA with safe-area padding */}
+        <div className="px-3 sm:px-4 lg:px-5 pt-2.5 pb-safe border-t border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#0B0E14] shrink-0">
           <button
             type="button"
             onClick={handleOpenCreate}
-            className="w-full min-h-[48px] px-4 rounded-xl bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] active:scale-[0.99] font-extrabold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-black/10 dark:shadow-black/40"
+            className="w-full min-h-[46px] sm:min-h-[48px] px-4 rounded-xl bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] active:scale-[0.99] font-extrabold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-black/10 dark:shadow-black/40"
           >
             <Plus className="w-5 h-5 shrink-0" aria-hidden="true" />
             Разместить маршрут
           </button>
         </div>
       </main>
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        themePreference={themePreference}
+        effectiveTheme={theme}
+        telegramColorScheme={telegramColorScheme}
+        mapStyle={mapStyle}
+        accentColor={accentColor}
+        compactMode={compactMode}
+        lowDataMode={lowDataMode}
+        onChangeThemePreference={handleChangeThemePreference}
+        onChangeMapStyle={handleChangeMapStyle}
+        onChangeAccent={handleChangeAccentColor}
+        onToggleCompactMode={() => setCompactMode((prev) => !prev)}
+        onToggleLowDataMode={() => setLowDataMode((prev) => !prev)}
+        onClose={() => setIsSettingsOpen(false)}
+      />
 
       <CreateRideModal
         isOpen={isCreateOpen}
@@ -1334,7 +1524,7 @@ export default function App() {
           setRoleFilter('all');
           setFromDistrict('');
           setToDistrict('');
-          setSelectedRide(ride);
+          handleSelectRide(ride);
           if (lowDataMode) setLowDataMode(false);
         }}
       />

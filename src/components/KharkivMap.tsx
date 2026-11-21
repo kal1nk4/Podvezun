@@ -6,7 +6,6 @@ import {
   Check,
   CheckCircle2,
   Crosshair,
-  Layers,
   Loader2,
   LocateFixed,
   MessageCircle,
@@ -42,7 +41,7 @@ import {
   KHARKIV_CENTER,
 } from '../utils/ridesLogic';
 import { openTelegramUser, triggerHaptic } from '../utils/telegram';
-import { getAccentOption, getMapStyleOption, MAP_STYLES } from '../utils/themeConfig';
+import { getAccentOption, getMapStyleOption } from '../utils/themeConfig';
 
 export type MapPickerTarget = 'from' | 'to' | null;
 
@@ -58,7 +57,7 @@ interface KharkivMapProps {
   theme: 'light' | 'dark';
   mapStyle: MapStyleId;
   accentColor: AccentColorId;
-  onChangeMapStyle: (style: MapStyleId) => void;
+  compactMode?: boolean;
   userLocation?: LatLng | null;
   locatingUser?: boolean;
   onLocateMe?: () => void;
@@ -123,7 +122,7 @@ export function KharkivMap({
   theme,
   mapStyle,
   accentColor,
-  onChangeMapStyle,
+  compactMode = false,
   userLocation = null,
   locatingUser = false,
   onLocateMe,
@@ -147,7 +146,6 @@ export function KharkivMap({
   const pickerRef = useRef<MapPickerTarget>(pickerTarget);
   const onPickRef = useRef(onPickPoint);
   const onSelectRef = useRef(onSelectRide);
-  const [isStyleMenuOpen, setIsStyleMenuOpen] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
   const [completingRide, setCompletingRide] = useState(false);
   const [submittingTag, setSubmittingTag] = useState<FeedbackTagId | null>(null);
@@ -186,7 +184,6 @@ export function KharkivMap({
     const userLayer = L.layerGroup().addTo(map);
 
     map.on('click', (e: L.LeafletMouseEvent) => {
-      setIsStyleMenuOpen(false);
       if (pickerRef.current) {
         onPickRef.current({ lat: e.latlng.lat, lng: e.latlng.lng });
       }
@@ -329,7 +326,6 @@ export function KharkivMap({
       );
 
       marker.on('click', () => {
-        setIsStyleMenuOpen(false);
         onSelectRef.current(ride);
       });
 
@@ -435,14 +431,17 @@ export function KharkivMap({
     if (fittedRouteKeyRef.current !== fitKey) {
       fittedRouteKeyRef.current = fitKey;
       const bounds = L.latLngBounds(points);
+      const isMobile = typeof window !== 'undefined' && window.innerWidth < 1024;
+      const mobileBottomPad =
+        typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.42) : 250;
       map.fitBounds(bounds, {
-        paddingTopLeft: [48, 72],
-        paddingBottomRight: [48, 245],
+        paddingTopLeft: isMobile ? [28, 60] : [48, 72],
+        paddingBottomRight: isMobile ? [28, mobileBottomPad] : [48, 245],
         maxZoom: 15,
-        animate: true,
+        animate: !compactMode,
       });
     }
-  }, [selectedRide, pickerTarget, routeState, accentPrimaryColor, isDark]);
+  }, [selectedRide, pickerTarget, routeState, accentPrimaryColor, isDark, compactMode]);
 
   const selectedAuthorTelegramId = selectedRide?.creatorTelegramId ?? null;
   const selectedAuthorProfile =
@@ -487,138 +486,15 @@ export function KharkivMap({
     >
       <div ref={containerRef} className="w-full h-full z-0" />
 
-      {/* Map style selector button & popover (top-right of map) */}
-      {!pickerTarget && (
-        <div className="absolute top-3 right-3 z-[550] flex flex-col items-end">
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic('light');
-              setIsStyleMenuOpen((prev) => !prev);
-            }}
-            aria-expanded={isStyleMenuOpen}
-            aria-haspopup="menu"
-            aria-label="Выбрать стиль карты"
-            className="min-h-[42px] min-w-[42px] px-2.5 sm:min-h-[46px] sm:px-3.5 rounded-2xl bg-white/92 dark:bg-[#131822]/92 border border-slate-200 dark:border-slate-700/80 shadow-xl backdrop-blur-md text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-[#1A2130] flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            <Layers className="w-4 h-4 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
-            <span className="hidden sm:inline">{currentStyle.label}</span>
-            <span className="hidden min-[380px]:inline sm:hidden">Карта</span>
-          </button>
-
-          {isStyleMenuOpen && (
-            <div
-              role="menu"
-              aria-label="Варианты оформления карты"
-              className="mt-2 w-64 rounded-2xl bg-white/96 dark:bg-[#131822]/96 border border-slate-200 dark:border-slate-700/80 shadow-2xl backdrop-blur-md p-1.5 space-y-1"
-            >
-              <div
-                role="presentation"
-                className="px-2.5 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400"
-              >
-                Тёмные тона карты
-              </div>
-              {MAP_STYLES.filter((opt) => opt.isDark).map((option) => {
-                const active = option.id === mapStyle;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={active}
-                    onClick={() => {
-                      triggerHaptic('light');
-                      onChangeMapStyle(option.id);
-                      setIsStyleMenuOpen(false);
-                    }}
-                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl text-left flex items-center justify-between gap-2.5 transition-colors cursor-pointer ${
-                      active
-                        ? 'bg-[var(--accent-soft)] text-[var(--accent-text)]'
-                        : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800/70'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span
-                        className="w-4 h-4 rounded-md border border-slate-300 dark:border-slate-600 shrink-0"
-                        style={{ backgroundColor: option.swatchColor }}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold leading-tight truncate">
-                          {option.label}
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight truncate">
-                          {option.description}
-                        </div>
-                      </div>
-                    </div>
-                    {active && (
-                      <Check className="w-4 h-4 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
-                    )}
-                  </button>
-                );
-              })}
-
-              <div
-                role="presentation"
-                className="px-2.5 pt-1.5 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 border-t border-slate-200/70 dark:border-slate-800/80"
-              >
-                Дневная карта
-              </div>
-              {MAP_STYLES.filter((opt) => !opt.isDark).map((option) => {
-                const active = option.id === mapStyle;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={active}
-                    onClick={() => {
-                      triggerHaptic('light');
-                      onChangeMapStyle(option.id);
-                      setIsStyleMenuOpen(false);
-                    }}
-                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl text-left flex items-center justify-between gap-2.5 transition-colors cursor-pointer ${
-                      active
-                        ? 'bg-[var(--accent-soft)] text-[var(--accent-text)]'
-                        : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800/70'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span
-                        className="w-4 h-4 rounded-md border border-slate-300 dark:border-slate-600 shrink-0"
-                        style={{ backgroundColor: option.swatchColor }}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold leading-tight truncate">
-                          {option.label}
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight truncate">
-                          {option.description}
-                        </div>
-                      </div>
-                    </div>
-                    {active && (
-                      <Check className="w-4 h-4 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Map point-picking prompt banner */}
       {pickerTarget && (
         <div
-          className="absolute top-3 left-3 right-3 z-[500] flex items-center justify-between gap-3 rounded-2xl bg-white/95 dark:bg-[#131822]/95 border border-[var(--accent-border)] px-4 py-3 shadow-2xl backdrop-blur-md"
+          className="absolute top-2.5 left-2.5 right-2.5 z-[500] flex items-center justify-between gap-2.5 rounded-2xl bg-white/95 dark:bg-[#131822]/95 border border-[var(--accent-border)] px-3.5 py-2.5 shadow-2xl backdrop-blur-md"
           role="status"
         >
-          <div className="flex items-center gap-2.5 min-w-0">
-            <Crosshair className="w-5 h-5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
-            <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 leading-tight">
+          <div className="flex items-center gap-2 min-w-0">
+            <Crosshair className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
+            <p className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 leading-tight">
               {pickerTarget === 'from'
                 ? 'Нажмите на карту: Точка А (Откуда)'
                 : 'Нажмите на карту: Точка Б (Куда)'}
@@ -634,20 +510,20 @@ export function KharkivMap({
         </div>
       )}
 
-      {/* Locate Me button above Leaflet zoom controls */}
+      {/* Locate Me button in top-right (never blocked by bottom sheet or selected route card) */}
       {!pickerTarget && onLocateMe && (
         <button
           type="button"
           onClick={() => {
             if (userLocation && mapRef.current) {
-              mapRef.current.setView([userLocation.lat, userLocation.lng], 13, { animate: true });
+              mapRef.current.setView([userLocation.lat, userLocation.lng], 13, { animate: !compactMode });
             }
             onLocateMe();
           }}
           disabled={locatingUser}
           aria-label="Показать моё местоположение на карте"
           title="Моё местоположение"
-          className="absolute right-[10px] bottom-[106px] z-[450] w-[38px] h-[38px] rounded-[10px] bg-white hover:bg-slate-100 text-slate-800 border border-slate-300/80 dark:bg-[#131822] dark:hover:bg-[#1E2634] dark:text-slate-200 dark:border-slate-700/80 shadow-lg flex items-center justify-center transition-colors cursor-pointer disabled:opacity-60"
+          className="absolute top-2.5 right-2.5 sm:top-3 sm:right-3 z-[520] min-h-[40px] min-w-[40px] rounded-xl bg-white/92 hover:bg-white text-slate-800 border border-slate-200 dark:bg-[#131822]/92 dark:hover:bg-[#1E2634] dark:text-slate-200 dark:border-slate-700/80 shadow-lg backdrop-blur-md flex items-center justify-center transition-colors cursor-pointer disabled:opacity-60"
         >
           {locatingUser ? (
             <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-text)]" aria-hidden="true" />
@@ -660,10 +536,10 @@ export function KharkivMap({
         </button>
       )}
 
-      {/* Compact selected ride route card overlaid on map */}
+      {/* Compact selected ride route card overlaid on bottom of map (<= 42dvh on mobile so OSRM route A->B stays clear above) */}
       {selectedRide && !pickerTarget && (
         <div
-          className="absolute bottom-3 left-3 right-3 sm:right-auto sm:w-[390px] max-h-[calc(100%-64px)] overflow-y-auto theme-scroll z-[500] rounded-2xl bg-white/95 dark:bg-[#131822]/95 border border-slate-200 dark:border-slate-700/80 p-3.5 shadow-2xl backdrop-blur-md"
+          className="absolute bottom-2.5 left-2.5 right-2.5 lg:bottom-3 lg:left-3 lg:right-auto lg:w-[390px] max-h-[42dvh] lg:max-h-[calc(100%-76px)] overflow-y-auto theme-scroll z-[500] rounded-2xl bg-white/96 dark:bg-[#131822]/96 border border-slate-200 dark:border-slate-700/80 p-3 sm:p-3.5 shadow-2xl backdrop-blur-md"
           data-testid="map-selected-ride-card"
         >
           <div className="flex items-start justify-between gap-2">
@@ -802,7 +678,7 @@ export function KharkivMap({
                               setSubmittingTag(null);
                             });
                           }}
-                          className="min-h-[30px] px-2.5 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-[11px] font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 transition-colors cursor-pointer disabled:opacity-50"
+                          className="min-h-[38px] px-2.5 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-xs font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 transition-colors cursor-pointer disabled:opacity-50"
                         >
                           {submittingTag === tag ? '...' : tag}
                         </button>
@@ -826,7 +702,7 @@ export function KharkivMap({
                       onMarkParticipated(selectedRide);
                     }}
                     data-testid="mark-ride-participated-btn"
-                    className="min-h-[32px] px-2.5 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-[11px] font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="min-h-[40px] px-3 rounded-lg bg-slate-100 hover:bg-[var(--accent-soft)] border border-slate-200 hover:border-[var(--accent-border)] text-xs font-semibold text-slate-700 hover:text-[var(--accent-text)] dark:bg-[#0B0E14] dark:border-slate-700/80 dark:text-slate-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-text)] shrink-0" aria-hidden="true" />
                     <span>Я участвовал(а) в поездке</span>
@@ -908,10 +784,14 @@ export function KharkivMap({
                     [selectedRide.toLat, selectedRide.toLng],
                   ];
                   const bounds = L.latLngBounds(fitPoints);
+                  const isMobile = typeof window !== 'undefined' && window.innerWidth < 1024;
+                  const mobileBottomPad =
+                    typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.42) : 255;
                   mapRef.current.fitBounds(bounds, {
-                    paddingTopLeft: [48, 72],
-                    paddingBottomRight: [48, 255],
+                    paddingTopLeft: isMobile ? [28, 60] : [48, 72],
+                    paddingBottomRight: isMobile ? [28, mobileBottomPad] : [48, 255],
                     maxZoom: 15,
+                    animate: !compactMode,
                   });
                 }
               }}

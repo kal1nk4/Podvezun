@@ -12,6 +12,10 @@ export type AppView = 'feed' | 'mine' | 'profile';
 
 export type ThemeMode = 'light' | 'dark';
 
+export type ThemePreference = 'auto' | 'light' | 'dark';
+
+export type SheetSnap = 'collapsed' | 'half' | 'expanded';
+
 export type AccentColorId = 'emerald' | 'sky' | 'indigo' | 'amber' | 'rose' | 'violet';
 
 export type MapStyleId = 'twilight' | 'aurora' | 'graphite' | 'ambernight' | 'osm';

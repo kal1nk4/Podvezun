@@ -183,7 +183,7 @@ export function CreateRideModal({
       aria-modal="true"
       aria-labelledby="create-ride-title"
     >
-      <div className="w-full sm:max-w-lg max-h-[92vh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="w-full sm:max-w-lg max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         {/* Grab handle on mobile */}
         <div className="sm:hidden pt-2.5 pb-1 flex justify-center shrink-0">
           <div className="w-10 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700" />
@@ -577,7 +577,7 @@ export function CreateRideModal({
           )}
 
           {/* Submit CTA */}
-          <div className="pt-1 pb-2">
+          <div className="pt-1 pb-safe">
             <button
               type="submit"
               disabled={submitting}

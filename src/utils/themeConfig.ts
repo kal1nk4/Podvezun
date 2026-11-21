@@ -1,4 +1,4 @@
-import type { AccentColorId, MapStyleId, ThemeMode } from '../types/ride';
+import type { AccentColorId, MapStyleId, ThemeMode, ThemePreference } from '../types/ride';
 
 export interface AccentThemeOption {
   id: AccentColorId;
@@ -33,6 +33,8 @@ export interface MapStyleOption {
 }
 
 export const THEME_STORAGE_KEY = 'podvezun_theme';
+export const THEME_PREF_STORAGE_KEY = 'podvezun_theme_pref';
+export const COMPACT_MODE_STORAGE_KEY = 'podvezun_compact_mode';
 export const MAP_STYLE_STORAGE_KEY = 'podvezun_map_style';
 export const ACCENT_STORAGE_KEY = 'podvezun_accent_color';
 
@@ -227,6 +229,24 @@ export function getAccentOption(id: AccentColorId): AccentThemeOption {
 
 export function getMapStyleOption(id: MapStyleId): MapStyleOption {
   return MAP_STYLES.find((s) => s.id === id) ?? MAP_STYLES[0];
+}
+
+export function isValidThemePreference(value: string | null): value is ThemePreference {
+  return value === 'auto' || value === 'light' || value === 'dark';
+}
+
+export function resolveEffectiveTheme(
+  preference: ThemePreference,
+  telegramColorScheme: ThemeMode | null,
+  systemPrefersDark: boolean = true
+): ThemeMode {
+  if (preference === 'light' || preference === 'dark') {
+    return preference;
+  }
+  if (telegramColorScheme === 'light' || telegramColorScheme === 'dark') {
+    return telegramColorScheme;
+  }
+  return systemPrefersDark ? 'dark' : 'light';
 }
 
 export function resolveCssAccentVars(

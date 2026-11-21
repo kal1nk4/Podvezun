@@ -78,7 +78,7 @@ export function RouteRadarModal({
       aria-modal="true"
       aria-labelledby="radar-modal-title"
     >
-      <div className="w-full sm:max-w-lg max-h-[90vh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="w-full sm:max-w-lg max-h-[90dvh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#131822] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         <div className="sm:hidden pt-2.5 pb-1 flex justify-center shrink-0">
           <div className="w-10 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700" />
         </div>
@@ -100,7 +100,7 @@ export function RouteRadarModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto theme-scroll p-5 space-y-5">
+        <div className="flex-1 overflow-y-auto theme-scroll p-4 sm:p-5 pb-safe space-y-4 sm:space-y-5">
           <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
             Укажите нужное направление — как только появится подходящая заявка, приложение сразу подсветит её в ленте и отправит оповещение.
           </p>

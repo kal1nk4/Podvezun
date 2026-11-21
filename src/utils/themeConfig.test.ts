@@ -6,8 +6,10 @@ import {
   getMapStyleOption,
   isValidAccentColor,
   isValidMapStyle,
+  isValidThemePreference,
   MAP_STYLES,
   resolveCssAccentVars,
+  resolveEffectiveTheme,
 } from './themeConfig';
 
 test('MAP_STYLES removed pastel and esri and provides 4 dark tones plus classic OSM', () => {
@@ -44,4 +46,18 @@ test('ACCENT_THEMES provides 6 customization colors and resolves CSS variables c
 
   assert.equal(getAccentOption('emerald').id, 'emerald');
   assert.equal(getMapStyleOption('aurora').id, 'aurora');
+});
+
+test('resolveEffectiveTheme follows explicit preference or Telegram colorScheme fallback', () => {
+  assert.equal(isValidThemePreference('auto'), true);
+  assert.equal(isValidThemePreference('light'), true);
+  assert.equal(isValidThemePreference('dark'), true);
+  assert.equal(isValidThemePreference('sepia'), false);
+
+  assert.equal(resolveEffectiveTheme('light', 'dark', true), 'light');
+  assert.equal(resolveEffectiveTheme('dark', 'light', false), 'dark');
+  assert.equal(resolveEffectiveTheme('auto', 'light', true), 'light');
+  assert.equal(resolveEffectiveTheme('auto', 'dark', false), 'dark');
+  assert.equal(resolveEffectiveTheme('auto', null, true), 'dark');
+  assert.equal(resolveEffectiveTheme('auto', null, false), 'light');
 });

@@ -33,6 +33,128 @@ export const FALLBACK_PREVIEW_USER: TelegramUserProfile = {
   isFallbackDemo: true,
 };
 
+interface TelegramWindowExtended {
+  Telegram?: {
+    WebApp?: {
+      colorScheme?: 'light' | 'dark';
+      viewportHeight?: number;
+      viewportStableHeight?: number;
+      onEvent?: (eventType: string, cb: () => void) => void;
+      offEvent?: (eventType: string, cb: () => void) => void;
+    };
+  };
+}
+
+export function getTelegramColorScheme(): 'light' | 'dark' | null {
+  try {
+    const winScheme =
+      typeof window !== 'undefined'
+        ? (window as unknown as TelegramWindowExtended).Telegram?.WebApp?.colorScheme
+        : undefined;
+    const scheme = winScheme ?? WebApp.colorScheme;
+    if (scheme === 'light' || scheme === 'dark') {
+      return scheme;
+    }
+  } catch {
+    // Ignore outside Telegram
+  }
+  return null;
+}
+
+export function subscribeTelegramThemeChange(callback: () => void): () => void {
+  const tg =
+    typeof window !== 'undefined'
+      ? (window as unknown as TelegramWindowExtended).Telegram?.WebApp
+      : undefined;
+
+  const handler = () => callback();
+
+  try {
+    if (tg?.onEvent) {
+      tg.onEvent('themeChanged', handler);
+    } else if (typeof WebApp.onEvent === 'function') {
+      WebApp.onEvent('themeChanged', handler);
+    }
+  } catch {
+    // Ignore outside Telegram
+  }
+
+  return () => {
+    try {
+      if (tg?.offEvent) {
+        tg.offEvent('themeChanged', handler);
+      } else if (typeof WebApp.offEvent === 'function') {
+        WebApp.offEvent('themeChanged', handler);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+  };
+}
+
+export function syncTelegramViewportHeight(): () => void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return () => {};
+  }
+
+  const tg = (window as unknown as TelegramWindowExtended).Telegram?.WebApp;
+
+  const updateHeight = () => {
+    const stableHeight =
+      tg?.viewportStableHeight ??
+      (typeof WebApp.viewportStableHeight === 'number' && WebApp.viewportStableHeight > 0
+        ? WebApp.viewportStableHeight
+        : undefined);
+    const liveHeight =
+      tg?.viewportHeight ??
+      (typeof WebApp.viewportHeight === 'number' && WebApp.viewportHeight > 0
+        ? WebApp.viewportHeight
+        : undefined);
+
+    const visualHeight = window.visualViewport?.height;
+    const candidate =
+      visualHeight && visualHeight < window.innerHeight - 80
+        ? visualHeight
+        : stableHeight || liveHeight || window.innerHeight;
+
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 200) {
+      document.documentElement.style.setProperty(
+        '--tg-viewport-height',
+        `${Math.round(candidate)}px`
+      );
+    }
+  };
+
+  updateHeight();
+
+  try {
+    if (tg?.onEvent) {
+      tg.onEvent('viewportChanged', updateHeight);
+    } else if (typeof WebApp.onEvent === 'function') {
+      WebApp.onEvent('viewportChanged', updateHeight);
+    }
+  } catch {
+    // Ignore outside Telegram
+  }
+
+  window.addEventListener('resize', updateHeight);
+  window.visualViewport?.addEventListener('resize', updateHeight);
+
+  return () => {
+    window.removeEventListener('resize', updateHeight);
+    window.visualViewport?.removeEventListener('resize', updateHeight);
+    try {
+      if (tg?.offEvent) {
+        tg.offEvent('viewportChanged', updateHeight);
+      } else if (typeof WebApp.offEvent === 'function') {
+        WebApp.offEvent('viewportChanged', updateHeight);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+  };
+}
+
 export function applyTelegramThemeColors(theme: 'light' | 'dark'): void {
   const color = theme === 'dark' ? '#0B0E14' : '#F8FAFC';
   try {

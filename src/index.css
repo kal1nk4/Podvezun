@@ -36,6 +36,27 @@
   font-variant-numeric: tabular-nums;
 }
 
+.app-shell-height {
+  height: 100dvh;
+  height: var(--tg-viewport-height, 100dvh);
+}
+
+.pb-safe {
+  padding-bottom: max(0.625rem, env(safe-area-inset-bottom, 0px));
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.podvezun-compact *,
+.podvezun-compact *::before,
+.podvezun-compact *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
 /* Soft, low-glare Leaflet styling for selectable map themes */
 .leaflet-container {
   background: #E2E8F0;
@@ -112,6 +133,12 @@ html.dark .leaflet-control-attribution a {
   border-radius: 10px !important;
   overflow: hidden;
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12) !important;
+}
+
+@media (max-width: 639px) {
+  .leaflet-control-zoom {
+    display: none !important;
+  }
 }
 
 .leaflet-control-zoom a {
